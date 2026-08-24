@@ -1,0 +1,138 @@
+name: Release
+
+# 只在打 tag 时发布镜像。推镜像是对外可见的发布行为，不该由每次 push 触发。
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write   # 推 GHCR 所需
+
+jobs:
+  publish:
+    name: 构建并推送镜像到 GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 发布前重跑门禁：tag 可能打在未过 CI 的提交上
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: 安装依赖
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff 静态检查
+        run: ruff check app tests
+
+      - name: 单元测试
+        env:
+          BFF_MOCK_MODE: "1"
+          BFF_SECRET_KEY: ci-only-secret-not-for-production
+        run: pytest -q
+
+      # 发布门禁不该比 PR 门禁弱：tag 可能打在未过 CI 的提交上
+      - name: 业务 E2E 回归（mock 模式）
+        env:
+          BFF_MOCK_MODE: "1"
+          BFF_SECRET_KEY: ci-only-secret-not-for-production
+          BFF_BASE_URL: http://127.0.0.1:8301
+        run: |
+          uvicorn app.main:app --host 127.0.0.1 --port 8301 > /tmp/bff-e2e.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8301/healthz > /dev/null 2>&1 && break
+            if [ "$i" = "30" ]; then
+              echo "::error::mock 服务 30 秒内未就绪"
+              cat /tmp/bff-e2e.log
+              exit 1
+            fi
+            sleep 1
+          done
+          python scripts/e2e_redeem_mock.py
+
+      - name: emoji 门禁（P0-1 硬规则）
+        run: python scripts/check_no_emoji.py
+
+      - uses: docker/setup-buildx-action@v3
+
+      # 用仓库自带的 GITHUB_TOKEN，无需额外配置密钥
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成镜像标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+
+      # 先 load 到本地做冒烟，通过后才 push —— 避免把起不来的镜像推出去
+      - name: 构建镜像（本地）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: newapi-bff:candidate
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 冒烟测试
+        run: |
+          docker run -d --name bff-rc \
+            -e BFF_MOCK_MODE=1 \
+            -e BFF_SECRET_KEY="$(openssl rand -hex 32)" \
+            -p 8000:8000 \
+            newapi-bff:candidate
+
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8000/readyz > /tmp/r.json 2>/dev/null && break
+            if [ "$i" = "30" ]; then
+              echo "::error::候选镜像 30 秒内未就绪，中止发布"
+              docker logs bff-rc
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "候选镜像就绪：$(cat /tmp/r.json)"
+
+          # 版本号必须被正确注入，否则线上无法回溯跑的是哪个版本
+          got=$(curl -fsS http://127.0.0.1:8000/healthz | grep -o '"version":"[^"]*"')
+          echo "$got" | grep -q "${{ github.ref_name }}" \
+            || { echo "::error::镜像版本号未正确注入：$got"; exit 1; }
+
+          docker rm -f bff-rc > /dev/null
+
+      - name: 推送镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha
+
+      - name: 输出发布结果
+        run: |
+          echo "### 镜像已发布" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

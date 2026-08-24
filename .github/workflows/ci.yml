@@ -1,0 +1,197 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+# 同一分支的新 push 取消旧运行，避免排队浪费
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: 安装依赖
+        run: pip install -r requirements-dev.txt
+
+      # 只检 app/ 与 tests/：scripts/ 是一次性运维探针脚本，
+      # 其风格问题不应阻塞发布
+      - name: Ruff 静态检查
+        run: ruff check app tests
+
+      # 团队 P0-1 硬规则：不得用 emoji 当功能图标（渲染不一致、无法按设计稿
+      # 控制样式、屏幕阅读器体验差）。一律用 SVG。
+      - name: emoji 门禁（P0-1 硬规则）
+        run: python scripts/check_no_emoji.py
+
+      - name: 单元测试
+        env:
+          BFF_MOCK_MODE: "1"
+          BFF_SECRET_KEY: ci-only-secret-not-for-production
+        run: pytest -q
+
+      # 30 项业务回归，覆盖「伪造兑换码不能开号」这条核心安全语义 ——
+      # 比单元测试更能挡住业务回退。mock 模式跑，不需要上游和任何凭证。
+      - name: 业务 E2E 回归（mock 模式）
+        env:
+          BFF_MOCK_MODE: "1"
+          BFF_SECRET_KEY: ci-only-secret-not-for-production
+          BFF_BASE_URL: http://127.0.0.1:8301
+        run: |
+          uvicorn app.main:app --host 127.0.0.1 --port 8301 > /tmp/bff-e2e.log 2>&1 &
+          echo $! > /tmp/bff-e2e.pid
+
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8301/healthz > /dev/null 2>&1 && break
+            if [ "$i" = "30" ]; then
+              echo "::error::mock 服务 30 秒内未就绪"
+              cat /tmp/bff-e2e.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # 脚本自身在有 FAIL 时 exit 1，这里直接透传退出码
+          python scripts/e2e_redeem_mock.py
+
+      - name: 收集 E2E 服务日志
+        if: always()
+        run: |
+          tail -50 /tmp/bff-e2e.log 2>/dev/null || true
+          kill "$(cat /tmp/bff-e2e.pid)" 2>/dev/null || true
+
+  build:
+    name: 构建镜像并验证启动
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: quality
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # 只构建到本地 tar，不推任何仓库。PR 阶段就该验证「镜像能起来」，
+      # 但推镜像是发布行为，属于 release 流程。
+      - name: 构建镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: newapi-bff:ci
+          build-args: |
+            APP_VERSION=ci-${{ github.sha }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 冒烟测试：Dockerfile 语法正确不代表容器能跑起来。这一步真实启动容器，
+      # 验证 /readyz 通过 —— 能同时抓出「静态资源没拷进镜像」「非 root 用户
+      # 写不了 /data」「依赖缺失」这几类只在运行时才暴露的错误。
+      - name: 冒烟测试：容器启动 + readyz
+        run: |
+          docker run -d --name bff-smoke \
+            -e BFF_MOCK_MODE=1 \
+            -e BFF_SECRET_KEY=ci-smoke-secret \
+            -p 8000:8000 \
+            newapi-bff:ci
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/readyz > /tmp/ready.json 2>/dev/null; then
+              echo "readyz 通过：$(cat /tmp/ready.json)"
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              echo "::error::容器 30 秒内未就绪"
+              docker logs bff-smoke
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # 首页必须能渲染（验证 static/ 确实在镜像里）
+          curl -fsS http://127.0.0.1:8000/ | grep -q 'static/app.js?v=' \
+            || { echo "::error::首页缺少带版本号的静态资源引用"; docker logs bff-smoke; exit 1; }
+
+          # 未登录访问受保护接口必须 401
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/user/self)
+          [ "$code" = "401" ] || { echo "::error::/api/user/self 未鉴权，返回 $code"; exit 1; }
+
+          # 容器必须以非 root 运行
+          uid=$(docker exec bff-smoke id -u)
+          [ "$uid" != "0" ] || { echo "::error::容器以 root 运行"; exit 1; }
+          echo "运行用户 uid=$uid"
+
+      - name: 校验弱密钥会被拒绝
+        run: |
+          # 弱密钥 = 任何人可伪造会话 Cookie 冒充任意用户，而 Cookie 里带着
+          # 该用户的 new-api PAT。这一步确保该防线没有在改动中被绕过。
+          # 空串这个 case 是实测踩到的：早先只判「不等于默认值」，
+          # BFF_SECRET_KEY= 传空串时检查会通过。
+          set -e
+          i=0
+          for key in "dev-only-secret-change-me" "" "changeme" "short-key"; do
+            i=$((i + 1))
+            name="bff-weak-$i"
+            port=$((8100 + i))
+            docker rm -f "$name" > /dev/null 2>&1 || true
+            docker run -d --name "$name" \
+              -e BFF_MOCK_MODE=0 \
+              -e BFF_SECRET_KEY="$key" \
+              -p "$port:8000" \
+              newapi-bff:ci > /dev/null
+          done
+          sleep 8
+          i=0
+          for key in "dev-only-secret-change-me" "" "changeme" "short-key"; do
+            i=$((i + 1))
+            port=$((8100 + i))
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/readyz")
+            if [ "$code" != "503" ]; then
+              echo "::error::弱密钥 '$key' 下 readyz 返回 $code，应为 503"
+              docker logs "bff-weak-$i"
+              exit 1
+            fi
+            echo "弱密钥 '$key' 已被拒绝（503）"
+          done
+
+      - name: 校验 compose 配置有效
+        run: |
+          # 拦「compose 文件语法错 / 变量插值写错」这类只在部署时才炸的问题
+          BFF_SECRET_KEY=$(openssl rand -hex 32) docker compose config -q
+          echo "compose 配置有效"
+
+          # BFF_SECRET_KEY 未设置时 compose 必须拒绝启动（:? 语法生效）
+          if docker compose config -q 2>/dev/null; then
+            echo "::error::未设置 BFF_SECRET_KEY 时 compose 仍通过校验"
+            exit 1
+          fi
+          echo "缺失 BFF_SECRET_KEY 已被 compose 拦下"
+
+      - name: 收集容器日志
+        if: always()
+        run: docker logs bff-smoke 2>&1 | tail -50 || true
+
+      - name: 清理
+        if: always()
+        run: |
+          docker rm -f bff-smoke bff-weak-1 bff-weak-2 bff-weak-3 bff-weak-4 \
+            > /dev/null 2>&1 || true
