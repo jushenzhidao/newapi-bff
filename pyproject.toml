@@ -1,0 +1,56 @@
+[project]
+name = "newapi-bff"
+version = "0.1.0"
+description = "new-api 用户侧 BFF（FastAPI + 原生 JS SPA）"
+requires-python = ">=3.12"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = [".venv", "dist", "demo", "__pycache__"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # bugbear
+    "UP",   # pyupgrade
+    "S",    # bandit 安全检查
+    "ASYNC",
+]
+
+# 豁免说明：这是给既有代码定的基线，目的是让门禁能拦住「新增的真问题」，
+# 而不是一次性把历史风格债全部翻出来阻塞 CI。每条都写了理由，
+# 不是随手关掉的。想收紧时逐条删除并配套修改代码即可。
+ignore = [
+    "E501",    # 行长交给 formatter；代码里大量中文注释按 100 列硬折反而更难读
+    "B008",    # Depends() 作为默认值是 FastAPI 的官方惯用法，不是可变默认参数陷阱
+    "E741",    # 日志处理函数里的 l 指 log 条目，是既有局部惯例，改名收益低于 diff 噪音
+    "B904",    # raise-from 缺失：现有 except 都已把上游 message 转成用户可读文案，
+               # 链式异常只影响调试栈可读性，作为独立技术债处理
+    "UP007",   # Optional[X] 与 X | None 并存，属风格统一问题，不影响行为
+    "UP015",   # open() 显式 "r" 模式，可读性偏好
+    "S311",    # random 仅用于 mock 模式生成演示日志数据，不参与任何安全决策；
+               # 真正需要随机性的地方（兑换码、订单号）用的是 secrets
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 运维探针脚本：允许硬编码测试凭证、assert 和 print
+"scripts/*" = ["S101", "S105", "S106", "T201"]
+# 测试：allow assert 与测试用假凭证。
+# S603 子进程调用：test_no_emoji.py 用 subprocess 跑门禁脚本自身，
+# 参数全是模块内常量（sys.executable + 固定路径），无任何外部输入拼接。
+"tests/*" = ["S101", "S105", "S106", "S603"]
+# store.py 是 mock 内存实现，"默认 Key" 被误判为硬编码密码
+"app/store.py" = ["S106"]
+# main.py:632 的 "dev-only-secret-change-me" 是 readyz 用来「识别并拒绝」
+# 默认密钥的比对基准，不是在设置密钥 —— 这正是防弱密钥的代码本身
+"app/main.py" = ["S105"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# 把项目根加进 sys.path，让 `from app import ...` 免安装即可 import
+pythonpath = ["."]

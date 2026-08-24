@@ -1,0 +1,104 @@
+# newapi-bff 生产编排。
+#
+# 用法：
+#   cp .env.example .env && vim .env      # 填 BFF_SECRET_KEY 等必填项
+#   docker compose up -d --build
+#   curl -fsS localhost:8000/readyz       # 应返回 status: ready
+#
+# 密钥全部从 .env 读取，不硬编码在本文件里 —— 本文件进仓库，.env 不进。
+
+services:
+  bff:
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
+        VCS_REF: ${VCS_REF:-unknown}
+        # 拉不到 3.13 时（内网 / 镜像站滞后）可降到 3.12，代码兼容 >=3.12。
+        # 也可换成私有 registry 前缀，如 my-mirror/library/python:3.13-slim
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.13-slim}
+    image: newapi-bff:${APP_VERSION:-dev}
+    container_name: newapi-bff
+    restart: unless-stopped
+
+    # 只发布到回环地址：生产由宿主机的 Nginx/Caddy 负责 TLS 终止与转发。
+    # 直接暴露 0.0.0.0:8000 意味着明文 HTTP 对公网可达，而会话 Cookie 里带着
+    # 用户的 new-api PAT，被中间人抓到等于账号失守。
+    ports:
+      - "127.0.0.1:${BFF_PORT:-8000}:8000"
+
+    environment:
+      # ---- 必填：会话 Cookie 签名密钥 ----
+      # 缺省值会让 /readyz 直接返回 503，容器起不来是刻意设计（弱密钥 =
+      # 任何人可伪造会话冒充任意用户，宁可不启动也不能带病上线）
+      BFF_SECRET_KEY: ${BFF_SECRET_KEY:?BFF_SECRET_KEY 必须设置，用 openssl rand -hex 32 生成}
+
+      # ---- 上游 new-api ----
+      NEWAPI_BASE_URL: ${NEWAPI_BASE_URL:-https://api.aihuobao.cn}
+      # 强烈建议用 PAT 而非账密：PAT 不经过 new-api 的会话系统，
+      # 可绕开「50 会话硬上限打满后 login 永久 409」这个最高危单点故障
+      NEWAPI_ADMIN_PAT: ${NEWAPI_ADMIN_PAT:-}
+      NEWAPI_ADMIN_UID: ${NEWAPI_ADMIN_UID:-0}
+      NEWAPI_ADMIN_USERNAME: ${NEWAPI_ADMIN_USERNAME:-}
+      NEWAPI_ADMIN_PASSWORD: ${NEWAPI_ADMIN_PASSWORD:-}
+
+      # ---- 运行模式 ----
+      BFF_MOCK_MODE: ${BFF_MOCK_MODE:-0}
+
+      # ---- 积分与活动 ----
+      BFF_POINTS_PER_CNY: ${BFF_POINTS_PER_CNY:-10000}
+      BFF_PROMO_SIGNUP_ENABLED: ${BFF_PROMO_SIGNUP_ENABLED:-1}
+      BFF_PROMO_SIGNUP_POINTS: ${BFF_PROMO_SIGNUP_POINTS:-20000}
+      BFF_PROMO_FIRST_TOPUP_ENABLED: ${BFF_PROMO_FIRST_TOPUP_ENABLED:-1}
+      BFF_PROMO_FIRST_TOPUP_RATE: ${BFF_PROMO_FIRST_TOPUP_RATE:-1.0}
+
+      # ---- 品牌 ----
+      BFF_BRAND_NAME: ${BFF_BRAND_NAME:-NexusAPI}
+      BFF_API_BASE_URL: ${BFF_API_BASE_URL:-}
+      BFF_BRAND_ICP: ${BFF_BRAND_ICP:-}
+      BFF_BRAND_CONTACT: ${BFF_BRAND_CONTACT:-}
+
+      # 反代与容器同宿主时，请求经 docker 网桥进来，源 IP 是网桥网段而非
+      # 127.0.0.1，需按实际网段放行，否则 XFF 会被 uvicorn 丢弃、
+      # 限流全落到同一个 IP 上。
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+
+    # promo_state.json（赠送幂等）与 admin_cred.json（管理员 PAT）都在这里。
+    # 丢了这个卷：所有用户的首充资格会被重置，可被重复领取赠送。
+    volumes:
+      - bff-data:/data
+
+    healthcheck:
+      # 编排层探针查 /readyz（含配置校验），比镜像内置的 /healthz 更严格。
+      # 用 python 而非 curl：镜像刻意没装 curl（少一个依赖、构建不依赖 apt 源）。
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+    # 容器内没有任何需要写盘的路径（状态都在 /data 卷），整个根文件系统只读
+    # 可以挡住「攻击者写 webshell 进静态目录」这类利用
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+volumes:
+  bff-data:
