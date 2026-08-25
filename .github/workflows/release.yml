@@ -58,6 +58,9 @@ jobs:
           BFF_MOCK_MODE: "1"
           BFF_SECRET_KEY: ci-only-secret-not-for-production
           BFF_BASE_URL: http://127.0.0.1:8301
+          # E2E 走明文 http，Secure Cookie 不会被 httpx 回传，登录态会整段丢失。
+          # 仅本步骤关闭，不影响生产镜像的 COOKIE_SECURE=1。
+          BFF_COOKIE_SECURE: "0"
         run: |
           uvicorn app.main:app --host 127.0.0.1 --port 8301 > /tmp/bff-e2e.log 2>&1 &
           for i in $(seq 1 30); do
