@@ -75,7 +75,8 @@ ADMIN_CRED_FILE: str = os.getenv(
 # security.py 用它经 HKDF-SHA256 派生 AES-256-GCM 密钥，兼顾机密性（载荷里的
 # 用户 PAT 不可读）与完整性（会话不可伪造）。
 # 注意：换这个值会让所有在线会话立即失效（旧密文解不开）。
-SECRET_KEY: str = os.getenv("BFF_SECRET_KEY", "dev-only-secret-change-me")
+SECRET_KEY_DEFAULT = "dev-only-secret-change-me"
+SECRET_KEY: str = os.getenv("BFF_SECRET_KEY", SECRET_KEY_DEFAULT)
 
 COOKIE_NAME = "bff_session"
 COOKIE_MAX_AGE = 7 * 24 * 3600  # 7 天；PAT 长期有效，不受 new-api 15min access_token 限制
@@ -121,10 +122,23 @@ QUOTA_PER_POINT: float = QUOTA_PER_CNY / POINTS_PER_CNY if POINTS_PER_CNY else 0
 
 
 def quota_to_points(quota) -> int:
-    """内部 quota → 对外积分（向下取整，绝不虚报余额）。"""
+    """内部 quota → 对外积分（向下取整，绝不虚报余额）。用于余额、累计等聚合值。"""
     if not QUOTA_PER_CNY:
         return 0
     return int(float(quota or 0) / QUOTA_PER_CNY * POINTS_PER_CNY)
+
+
+def quota_to_points_exact(quota) -> float:
+    """内部 quota → 对外积分（保留小数）。
+
+    单条调用日志绝不能用 quota_to_points()：1 积分 = 50 quota，一次小请求
+    的 quota 常在 10~49 之间，向下取整后恒为 0，明细里就全变成「-」，
+    但累计消耗（对总 quota 一次性换算）却是正常的正数 —— 用户看到的就是
+    「总额有值、每条都空」。这里保留 4 位小数，够表达 1 quota（=0.02 积分）。
+    """
+    if not QUOTA_PER_CNY:
+        return 0.0
+    return round(float(quota or 0) / QUOTA_PER_CNY * POINTS_PER_CNY, 4)
 
 
 def points_to_quota(points) -> int:
@@ -207,3 +221,17 @@ DOC_MODELS: tuple = tuple(
 def brand_logo_text() -> str:
     """Logo 字母：显式配置优先，否则取品牌名首字符。"""
     return BRAND_LOGO_TEXT or (BRAND_NAME[:1].upper() if BRAND_NAME else "A")
+
+
+# 镜像版本：Dockerfile 把构建期的 APP_VERSION 转成运行时的 BFF_VERSION。
+# 放在 config 而非 main，是因为健康检查与 Logfire 上报都要用同一个值 ——
+# 两处各读一次环境变量早晚会漂移成两个不同的版本号。
+APP_VERSION: str = os.getenv("BFF_VERSION", "dev")
+
+
+# ==================== 可观测性（Logfire）====================
+# token 留空 = 完全关闭，连 SDK 都不导入。可观测性是运维增强，不该成为
+# 本地开发和测试的前置依赖 —— 没配 token 就不该有任何行为差异。
+LOGFIRE_TOKEN: str = os.getenv("LOGFIRE_TOKEN", "").strip()
+LOGFIRE_ENVIRONMENT: str = os.getenv("LOGFIRE_ENVIRONMENT", "local").strip()
+LOGFIRE_ENABLED: bool = bool(LOGFIRE_TOKEN)

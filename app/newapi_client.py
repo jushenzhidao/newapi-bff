@@ -58,7 +58,7 @@ from typing import Any, Optional
 
 import httpx
 
-from . import config
+from . import config, observability
 
 logger = logging.getLogger("bff.newapi")
 
@@ -84,6 +84,9 @@ def get_client() -> httpx.AsyncClient:
             limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
             trust_env=False,  # 不走本机代理
         )
+        # 出站调用埋点：上游 new-api 的耗时与失败是 BFF 最主要的故障来源，
+        # 只看入站请求会把上游超时误判成 BFF 自身慢。未启用 Logfire 时为空操作。
+        observability.instrument_httpx(_client)
     return _client
 
 

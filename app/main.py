@@ -40,7 +40,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, promo, redeem_code, store
+from . import config, observability, promo, redeem_code, store
 from . import newapi_client as na
 from .newapi_client import NewApiError
 from .security import clear_session, require_session, set_session
@@ -50,10 +50,14 @@ logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="newapi-bff", docs_url=None, redoc_url=None)
 
+# 可观测性接线：未配 LOGFIRE_TOKEN 时为空操作，且初始化失败不影响服务启动。
+observability.setup(app)
+
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 MOCK = config.MOCK_MODE
-P = config.quota_to_points  # quota → 积分
+P = config.quota_to_points  # quota → 积分（整数，用于余额/聚合）
+PX = config.quota_to_points_exact  # quota → 积分（带小数，用于单条日志明细）
 # new-api 对 User.Password 有 max 校验（实测 20 位通过、24 位失败）。
 # 在 BFF 层先拦，避免用户填了 24 位密码后拿到一句英文 validation 报错。
 MAX_PASSWORD_LEN = 20
@@ -412,7 +416,8 @@ def _log_payload(l: dict) -> dict:
         "token_name": l.get("token_name", ""),
         "prompt_tokens": l.get("prompt_tokens", 0),
         "completion_tokens": l.get("completion_tokens", 0),
-        "points": P(l.get("quota", 0)), "content": l.get("content", ""),
+        # 单条明细用带小数的换算：小请求 quota < 50 时整数换算会恒为 0
+        "points": PX(l.get("quota", 0)), "content": l.get("content", ""),
         "created_at": l["created_at"],
     }
 
@@ -681,7 +686,7 @@ async def mock_create_redemption(body: MockRedemptionBody):
 
 
 # ==================== 健康检查 ====================
-APP_VERSION = os.getenv("BFF_VERSION", "dev")
+APP_VERSION = config.APP_VERSION  # 单一事实源在 config，健康检查与 Logfire 共用
 _STARTED_AT = time.time()
 
 
@@ -706,21 +711,48 @@ async def readyz():
     伪造会话 Cookie 冒充任意用户、并解出别人 Cookie 里的 PAT（该值经 HKDF 派生
     出会话加密密钥）；管理员凭证缺失会让建号/赠送/兑换码静默瘫痪。
     """
-    checks: dict[str, bool] = {
-        "static_assets": (STATIC_DIR / "index.html").is_file(),
-        "state_dir_writable": _state_dir_writable(),
+    # 每项返回 (通过?, 失败原因)。原因必须是**可行动的**：
+    # 早期版本只返回一个 bool，运维看到 `secret_key_configured: false` 时，
+    # 「变量没注入」「注入了空串」「值太短」这三种完全不同的处置动作
+    # （补 .env / 查 compose 插值 / 重新生成密钥）无法区分 —— 实测就是
+    # 因为这个日志读不出信息，才多花了时间在错的方向上排查。
+    checks: dict[str, bool] = {}
+    reasons: dict[str, str] = {}
+
+    for name, (passed, reason) in {
+        "static_assets": _check_static_assets(),
+        "state_dir_writable": _check_state_dir(),
         # mock 模式是本地演示，允许用默认密钥；真实模式必须注入
-        "secret_key_configured": MOCK or _secret_key_strong(),
+        "secret_key_configured": (True, "") if MOCK else _check_secret_key(),
         # 真实模式必须有管理员凭证，否则注册、首充赠送、兑换码登录全都不可用。
         # config.py 已移除默认账密（会随公开仓库/镜像分发），所以这里要显式兜住。
-        "admin_cred_configured": MOCK or _admin_cred_configured(),
-    }
-    failed = [k for k, v in checks.items() if not v]
-    if failed:
-        logger.error("readiness 检查未通过: %s", ", ".join(failed))
+        "admin_cred_configured": (True, "") if MOCK else _check_admin_cred(),
+    }.items():
+        checks[name] = passed
+        if not passed:
+            reasons[name] = reason
+
+    if reasons:
+        # 带原因一起打，日志本身就够定位问题，不用再去翻代码猜哪个分支挂了
+        logger.error("readiness 检查未通过: %s",
+                     "; ".join(f"{k}: {v}" for k, v in reasons.items()))
         return JSONResponse(status_code=503,
-                            content={"status": "unready", "checks": checks, "failed": failed})
+                            content={"status": "unready", "checks": checks,
+                                     "failed": list(reasons), "reasons": reasons})
     return {"status": "ready", "checks": checks, "version": APP_VERSION}
+
+
+def _check_static_assets() -> tuple[bool, str]:
+    if (STATIC_DIR / "index.html").is_file():
+        return True, ""
+    return False, f"{STATIC_DIR / 'index.html'} 不存在（静态资源未进镜像，首页会 500）"
+
+
+def _check_state_dir() -> tuple[bool, str]:
+    if _state_dir_writable():
+        return True, ""
+    d = Path(config.PROMO_STATE_FILE).parent
+    return False, f"{d} 不可写（赠送幂等无法落盘，同一用户可反复领取）"
 
 
 def _state_dir_writable() -> bool:
@@ -736,31 +768,61 @@ def _state_dir_writable() -> bool:
 # 已知弱值黑名单。只比对「不等于默认值」是不够的：`BFF_SECRET_KEY=` 传空串时
 # 它确实不等于默认值，但空密钥派生出的 AES 密钥是公开可计算的，等于没加密 ——
 # 实测踩到过。
-_WEAK_SECRETS = {"dev-only-secret-change-me", "changeme", "secret", "test"}
+_DEFAULT_SECRET = config.SECRET_KEY_DEFAULT  # 单一事实源，避免两处字面量漂移
+_WEAK_SECRETS = {_DEFAULT_SECRET, "changeme", "secret", "test"}
 _MIN_SECRET_LEN = 32  # openssl rand -hex 32 给 64 字符，正常配置远超此值
 
 
-def _secret_key_strong() -> bool:
-    """会话加密密钥是否足够强。
+_FIX_SECRET = "用 `openssl rand -hex 32` 生成后写入 .env 的 BFF_SECRET_KEY"
+
+
+def _check_secret_key() -> tuple[bool, str]:
+    """会话加密密钥是否足够强，附可行动的失败原因。
 
     自 Cookie 改为 AES-256-GCM 加密后（app/security.py），这个值经 HKDF 派生出
     AES 密钥，它同时承担两件事：机密性（PAT 不可读）与完整性（会话不可伪造）。
     密钥弱 = 攻击者既能伪造会话冒充任意用户，也能解出别人 Cookie 里的 PAT。
     这是宁可不启动也不能放过的配置错误，判定从严：空值、过短、已知弱值一律不通过。
+
+    原因里只带长度和判定结论，**不带密钥内容**：readyz 是无认证探针，
+    响应会进日志和监控系统，泄露密钥前缀等于泄露密钥。
     """
-    key = (config.SECRET_KEY or "").strip()
-    return len(key) >= _MIN_SECRET_LEN and key.lower() not in _WEAK_SECRETS
+    raw = config.SECRET_KEY or ""
+    key = raw.strip()
+    if not key:
+        # 区分「压根没设」和「设了空串」：前者补变量，后者查 compose 插值是否被吞
+        how = "BFF_SECRET_KEY 未注入" if not raw else "BFF_SECRET_KEY 注入了空值"
+        return False, f"{how}，{_FIX_SECRET}"
+    if key.lower() in _WEAK_SECRETS:
+        # config.SECRET_KEY 有默认占位值兜底，所以「变量没注入」会走到这里。
+        # 两者处置动作不同（补变量 vs 换掉手填的弱值），措辞要分开。
+        if key == _DEFAULT_SECRET:
+            return False, f"BFF_SECRET_KEY 未注入，仍是默认占位值，{_FIX_SECRET}"
+        return False, f"BFF_SECRET_KEY 是已知弱值，{_FIX_SECRET}"
+    if len(key) < _MIN_SECRET_LEN:
+        return False, (f"BFF_SECRET_KEY 只有 {len(key)} 字符，"
+                       f"至少需要 {_MIN_SECRET_LEN}，{_FIX_SECRET}")
+    return True, ""
 
 
-def _admin_cred_configured() -> bool:
-    """是否具备管理员凭证（PAT 直供 或 账密，二者其一即可）。
+def _check_admin_cred() -> tuple[bool, str]:
+    """是否具备管理员凭证（PAT 直供 或 账密，二者其一即可），附失败原因。
 
     PAT 优先：它不经过 new-api 的会话系统，可绕开「50 会话硬上限打满后
     login 永久 409」这个最高危单点故障。
     """
     has_pat = bool(config.NEWAPI_ADMIN_PAT and config.NEWAPI_ADMIN_UID)
     has_userpass = bool(config.NEWAPI_ADMIN_USERNAME and config.NEWAPI_ADMIN_PASSWORD)
-    return has_pat or has_userpass
+    if has_pat or has_userpass:
+        return True, ""
+    # 指明缺哪一半，避免运维两边都去试
+    if config.NEWAPI_ADMIN_PAT and not config.NEWAPI_ADMIN_UID:
+        return False, "已配 NEWAPI_ADMIN_PAT 但缺 NEWAPI_ADMIN_UID，两者必须成对"
+    if config.NEWAPI_ADMIN_USERNAME and not config.NEWAPI_ADMIN_PASSWORD:
+        return False, "已配 NEWAPI_ADMIN_USERNAME 但缺 NEWAPI_ADMIN_PASSWORD，两者必须成对"
+    return False, ("缺管理员凭证，注册/首充赠送/兑换码登录都会失效；"
+                   "配 NEWAPI_ADMIN_PAT+NEWAPI_ADMIN_UID（推荐，可绕开会话上限）"
+                   "或 NEWAPI_ADMIN_USERNAME+NEWAPI_ADMIN_PASSWORD")
 
 
 # ==================== 静态资源 ====================

@@ -70,6 +70,16 @@ function esc(s) {
 function fmtNum(n) { return Number(n || 0).toLocaleString("zh-CN"); }
 /* 积分是对外唯一计价单位；服务端已完成 quota→积分换算，前端只负责展示 */
 function fmtPoints(p) { return fmtNum(Math.round(p || 0)); }
+/* 单条日志的积分可能不足 1（1 积分 = 50 quota），四舍五入会变 0，
+   这里按量级动态保留小数，保证明细列不再出现「-」或「0」。 */
+function fmtPointsFine(p) {
+  const n = Number(p || 0);
+  if (n === 0) return "0";
+  const abs = Math.abs(n);
+  if (abs >= 100) return fmtNum(Math.round(n));
+  if (abs >= 1) return n.toFixed(2).replace(/\.?0+$/, "");
+  return n.toFixed(abs >= 0.01 ? 2 : 4).replace(/\.?0+$/, "");
+}
 function fmtPointsUnit(p) { return `${fmtPoints(p)} ${PROMO.unit}`; }
 /* 积分 → 参考人民币（仅在需要给用户价格感知时使用，如充值档位） */
 function pointsToCny(p) { return (Number(p || 0) / (PROMO.points_per_cny || 10000)); }
@@ -736,8 +746,8 @@ function logRowHtml(l, compact = false) {
   else if (t === 2) { typeBadge = '<span class="badge badge-green">消费</span>'; desc = `<span class="mono">${esc(l.model_name || "-")}</span>`; }
   else if (t === 7) { typeBadge = '<span class="badge badge-gray">登录</span>'; desc = "账号登录"; }
   else { typeBadge = '<span class="badge badge-gray">系统</span>'; desc = esc(l.content || "-").slice(0, 40); }
-  const pts = l.points
-    ? (t === 1 ? `<span class="text-green">+${fmtPoints(l.points)}</span>` : `<span class="pts-out">-${fmtPoints(l.points)}</span>`)
+  const pts = Number(l.points) > 0
+    ? (t === 1 ? `<span class="text-green">+${fmtPointsFine(l.points)}</span>` : `<span class="pts-out">-${fmtPointsFine(l.points)}</span>`)
     : "-";
   if (compact) {
     return `<tr><td class="muted">${fmtTime(l.created_at)}</td><td>${typeBadge}</td><td>${desc}</td><td>${pts}</td></tr>`;
@@ -827,7 +837,7 @@ async function renderAnalytics() {
       </div>
       <div class="card stat-card">
         <div class="stat-label">近 7 天消耗</div>
-        <div class="stat-value">${fmtPoints(points7)}</div>
+        <div class="stat-value">${fmtPointsFine(points7)}</div>
         <div class="stat-extra">${PROMO.unit}</div>
       </div>
       <div class="card stat-card">
@@ -860,12 +870,13 @@ async function renderAnalytics() {
 
     <div class="card" style="margin-top:18px;">
       <div class="card-title">模型${PROMO.unit}消耗排行</div>
+      <div class="muted" style="margin:-6px 0 12px;font-size:12px">按${PROMO.unit}消耗从高到低排序，右侧为调用次数</div>
       ${models.length === 0 ? '<div class="muted" style="text-align:center;padding:24px 0">暂无消费记录，接入后这里会展示各模型的消耗分布</div>' :
         models.map(([name, v], i) => `
           <div class="model-row">
             <span class="m-name" title="${esc(name)}">${esc(name)}</span>
             <div class="m-bar-track"><div class="m-bar" style="width:${Math.max(3, v.points / maxModelPoints * 100)}%;animation-delay:${i * 70}ms"></div></div>
-            <span class="m-val">${fmtPoints(v.points)}</span>
+            <span class="m-val">${fmtPointsFine(v.points)}</span>
             <span class="m-val muted">${v.count} 次</span>
           </div>`).join("")}
     </div>`;
