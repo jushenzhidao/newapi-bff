@@ -8,6 +8,11 @@ httpx==0.27.*
 # 钉死小版本：加密是安全边界，不接受 * 通配带来的意外升级。
 cryptography==43.0.3
 
+# app/config.py 在 import 期加载项目根 .env。
+# 此前它仅作为 uvicorn[standard] 的传递依赖存在，未显式声明 —— 上游一旦调整
+# extras，.env 就会静默不再被读取，全部配置回落默认值（Logfire 曾因此不上报）。
+python-dotenv==1.2.3
+
 # 可观测性（app/observability.py）。未配 LOGFIRE_TOKEN 时不导入 SDK、零副作用，
 # 因此它对本地开发和 CI 不构成前置依赖。
 # extras 带入 FastAPI / httpx 的 OTel instrumentation，缺了会导致埋点静默失效。

@@ -7,6 +7,12 @@ import os
 
 import pytest
 
+# 禁止 app.config 加载项目根 .env。开发机上的 .env 带着真实管理员 PAT、
+# 自定义积分汇率和 Logfire token，一旦渗进来测试就有两个后果：
+# 断言随本机配置飘（本地过、CI 挂，或反之），以及测试流量被上报到真实 Logfire 项目。
+# 测试结论必须只由代码和夹具决定。必须在 import app.* 之前设置。
+os.environ["BFF_SKIP_DOTENV"] = "1"
+
 # mock 模式：不连真实 new-api，CI 里没有上游也能跑
 os.environ.setdefault("BFF_MOCK_MODE", "1")
 os.environ.setdefault("BFF_SECRET_KEY", "test-only-secret-not-for-production")
@@ -14,6 +20,11 @@ os.environ.setdefault("BFF_SECRET_KEY", "test-only-secret-not-for-production")
 # TestClient 的 base_url 是明文 http://testserver，Secure Cookie 会被 httpx 丢弃，
 # 导致所有依赖登录态的用例拿到 401。生产默认值是 1，这里显式关掉。
 os.environ.setdefault("BFF_COOKIE_SECURE", "0")
+
+# 第二道防线：即使 token 从真实环境变量（而非 .env）传进来也强制关闭上报，
+# 否则测试流量会混进 Logfire 的真实项目污染线上数据。
+# 用赋值而非 setdefault：这是安全约束，不接受被外部环境覆盖。
+os.environ["LOGFIRE_TOKEN"] = ""
 
 
 @pytest.fixture

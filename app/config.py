@@ -4,6 +4,27 @@ MOCK_MODE=0（默认）走真实 new-api；BFF_MOCK_MODE=1 走内存 mock 演示
 生产环境务必用环境变量注入 BFF_SECRET_KEY / 管理员账密。
 """
 import os
+from pathlib import Path
+
+# 加载项目根 .env。必须在本模块任何 os.getenv 之前执行 —— 下面的配置项都是
+# import 期求值的模块级常量，晚一步加载等于没加载。
+#
+# override=False 是刻意的：真实环境变量（compose environment、CI secrets、
+# 命令行前缀）优先级必须高于 .env 文件，否则开发机上一份陈旧的 .env 会静默
+# 覆盖生产注入值。Docker 部署走 compose 的 env_file，此处 .env 不存在也不报错。
+#
+# dotenv 缺失时降级为「只读环境变量」而不是崩溃：配置加载失败让整个进程起不来，
+# 代价远大于少读一个本地文件。
+#
+# BFF_SKIP_DOTENV=1 用于测试：测试结论必须只由代码和夹具决定，不能随开发者本机
+# .env 的内容而变（真实管理员 PAT、自定义积分汇率都会让断言飘）。
+if os.getenv("BFF_SKIP_DOTENV") != "1":
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+    except ImportError:
+        pass
 
 
 def _int(name: str, default: int) -> int:
