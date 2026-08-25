@@ -6,7 +6,7 @@ httpx==0.27.*
 # 已移除 itsdangerous：它只签名不加密，载荷是 base64 明文 JSON，而会话里装着
 # 用户的 new-api PAT —— 任何读到 Cookie 字符串的人无需密钥即可直接解出。
 # 钉死小版本：加密是安全边界，不接受 * 通配带来的意外升级。
-cryptography==43.0.3
+cryptography==50.0.0
 
 # app/config.py 在 import 期加载项目根 .env。
 # 此前它仅作为 uvicorn[standard] 的传递依赖存在，未显式声明 —— 上游一旦调整
