@@ -68,7 +68,8 @@ def setup(app) -> bool:
             scrubbing=logfire.ScrubbingOptions(callback=_scrub),
             console=False,  # 本地已有 logging 输出，重复打印只会淹没真实日志
         )
-    except Exception as exc:  # noqa: BLE001 —— 见模块头约束 2
+    # 宽泛捕获是刻意的：见模块头约束 2 —— 可观测性故障绝不能拖垮业务启动。
+    except Exception as exc:
         logger.warning("logfire 初始化失败，上报关闭，服务继续运行: %s", exc)
         return False
 
@@ -102,7 +103,8 @@ def _try_instrument(name: str, fn, *args, **kwargs) -> bool:
     try:
         fn(*args, **kwargs)
         return True
-    except Exception as exc:  # noqa: BLE001
+    # 同上：逐项独立容错，单个埋点失败不连带跳过其余埋点。
+    except Exception as exc:
         logger.warning(
             "logfire %s 埋点未挂载（该维度不上报，服务不受影响）: %s；"
             "缺依赖时执行 pip install 'logfire[fastapi,httpx]'",

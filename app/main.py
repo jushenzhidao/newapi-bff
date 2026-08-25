@@ -773,7 +773,8 @@ _WEAK_SECRETS = {_DEFAULT_SECRET, "changeme", "secret", "test"}
 _MIN_SECRET_LEN = 32  # openssl rand -hex 32 给 64 字符，正常配置远超此值
 
 
-_FIX_SECRET = "用 `openssl rand -hex 32` 生成后写入 .env 的 BFF_SECRET_KEY"
+# 失败时回给运维的修复指引文案，不是密钥本身（变量名含 SECRET 触发 S105 误报）。
+_FIX_SECRET = "用 `openssl rand -hex 32` 生成后写入 .env 的 BFF_SECRET_KEY"  # noqa: S105
 
 
 def _check_secret_key() -> tuple[bool, str]:

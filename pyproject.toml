@@ -44,9 +44,11 @@ ignore = [
 "tests/*" = ["S101", "S105", "S106", "S603"]
 # store.py 是 mock 内存实现，"默认 Key" 被误判为硬编码密码
 "app/store.py" = ["S106"]
-# main.py:632 的 "dev-only-secret-change-me" 是 readyz 用来「识别并拒绝」
-# 默认密钥的比对基准，不是在设置密钥 —— 这正是防弱密钥的代码本身
-"app/main.py" = ["S105"]
+# 注：原 "app/main.py" = ["S105"] 已移除 —— 该豁免针对的字面量
+# "dev-only-secret-change-me" 已收敛为 config.SECRET_KEY_DEFAULT 单一事实源，
+# main.py 只引用常量、不再出现字面量，规则已空转。豁免改为 config.py 的行内
+# noqa: S105，范围精确到一行，避免整文件关闭 S105（config.py 恰是最容易被
+# 误塞真凭证的文件）。
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

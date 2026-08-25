@@ -75,7 +75,12 @@ ADMIN_CRED_FILE: str = os.getenv(
 # security.py 用它经 HKDF-SHA256 派生 AES-256-GCM 密钥，兼顾机密性（载荷里的
 # 用户 PAT 不可读）与完整性（会话不可伪造）。
 # 注意：换这个值会让所有在线会话立即失效（旧密文解不开）。
-SECRET_KEY_DEFAULT = "dev-only-secret-change-me"
+#
+# 行尾抑制 S105 的理由：这不是密码，而是「未配置」的哨兵值 —— main.py 的
+# _WEAK_SECRETS 拿它做黑名单比对，/readyz 据此拒绝启动，即防弱密钥的机制本身。
+# 选行内抑制而非整文件豁免：config.py 是最容易被误塞真凭证的文件，
+# 整文件关掉这条检查等于永久放弃对它的看护。
+SECRET_KEY_DEFAULT = "dev-only-secret-change-me"  # noqa: S105
 SECRET_KEY: str = os.getenv("BFF_SECRET_KEY", SECRET_KEY_DEFAULT)
 
 COOKIE_NAME = "bff_session"
