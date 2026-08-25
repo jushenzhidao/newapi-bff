@@ -1,44 +1,156 @@
-"""签名 Cookie 会话（无状态 BFF）。
+"""加密 Cookie 会话（无状态 BFF）。
 
 会话载荷：{"uid": int, "username": str, "pat": str}
 pat = new-api 的 Personal Access Token（长期有效），
 这是修订版方案二的核心：不代持 15 分钟 access_token，改持 PAT。
+
+## 为什么是加密而不只是签名
+
+早期版本用 itsdangerous 的 URLSafeTimedSerializer，它只做 **签名**，不做
+**加密** —— 载荷是 base64 编码的明文 JSON。实测：不需要 SECRET_KEY，
+把 Cookie 值按 `.` 切开取第一段做 urlsafe_b64decode，PAT 直接可读。
+
+这意味着任何能读到 Cookie 字符串的路径都等于泄露 PAT，而不只是「中间人抓包」：
+浏览器 devtools、崩溃转储、误开 httponly 后的 XSS、把请求头贴进工单或日志、
+CDN/WAF 的请求留存、用户自己截图求助。签名只保证「载荷没被篡改」，
+完全不保证「载荷不可读」。
+
+现在改为 AES-256-GCM 加密：密文 + 认证标签，兼具机密性与完整性，
+GCM 的 tag 校验同时替代了原来签名提供的防篡改能力。
+
+## 密钥派生
+
+复用 config.SECRET_KEY（部署方已被要求用 openssl rand -hex 32 生成），
+经 HKDF-SHA256 派生出 32 字节 AES 密钥，info 参数做域分离，避免同一个
+SECRET_KEY 在未来别处复用时产生密钥重合。
+
+## 兼容性
+
+不兼容旧的签名 Cookie —— 旧 Cookie 解析失败即返回 None，表现为 401，
+前端走既有的重新登录流程。这是刻意的：明文 PAT 已存在泄露风险，
+上线时强制刷新一轮会话本身就是正确的安全动作。
 """
+import base64
+import json
+import os
+import time
 from typing import Optional
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import HTTPException, Request, Response
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from . import config
 
-_serializer = URLSafeTimedSerializer(config.SECRET_KEY, salt="bff-session")
+# 版本前缀：将来若需换算法/换密钥派生方式，靠它区分格式而不是靠解析失败去猜。
+_SCHEME = b"v2"
+
+# GCM 推荐 96-bit nonce。每次加密必须重新随机生成 —— 同密钥下 nonce 重用会
+# 直接破坏 GCM 的安全性（可恢复明文异或、可伪造 tag），这是 GCM 最致命的误用。
+_NONCE_LEN = 12
+
+
+def _aes_key() -> bytes:
+    """从 SECRET_KEY 派生 AES-256 密钥。
+
+    每次调用都重新派生而不缓存：SECRET_KEY 在测试里会被 monkeypatch 改写，
+    缓存会让改写不生效。HKDF 本身开销极小（单次 HMAC），不值得为它引入
+    需要手动失效的缓存。
+    """
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b"bff-session-aead-v2",
+    ).derive(config.SECRET_KEY.encode("utf-8"))
+
+
+def _b64e(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64d(text: str) -> bytes:
+    padded = text + "=" * (-len(text) % 4)
+    return base64.urlsafe_b64decode(padded)
+
+
+def _encrypt(payload: dict) -> str:
+    # 签发时间随载荷一起加密，用于服务端判过期。不用 Cookie 的 max_age 代替：
+    # max_age 由浏览器执行，攻击者拿到 Cookie 值后可以无限期重放。
+    body = dict(payload)
+    body["iat"] = int(time.time())
+    plaintext = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+    nonce = os.urandom(_NONCE_LEN)
+    # nonce 作为 AAD 一并认证，防止密文与 nonce 被拆开重组
+    ciphertext = AESGCM(_aes_key()).encrypt(nonce, plaintext, _SCHEME)
+    return f"{_SCHEME.decode()}.{_b64e(nonce)}.{_b64e(ciphertext)}"
+
+
+def _decrypt(token: str) -> Optional[dict]:
+    try:
+        scheme, nonce_b64, ct_b64 = token.split(".", 2)
+    except ValueError:
+        return None
+    if scheme.encode() != _SCHEME:
+        return None
+
+    try:
+        plaintext = AESGCM(_aes_key()).decrypt(
+            _b64d(nonce_b64), _b64d(ct_b64), _SCHEME
+        )
+        body = json.loads(plaintext)
+    except (InvalidTag, ValueError, TypeError, json.JSONDecodeError):
+        # InvalidTag 覆盖了篡改、错密钥、错 nonce 三种情况；
+        # 其余异常是畸形 base64 / 非 JSON。一律当作无效会话，不区分原因对外报错，
+        # 避免把「密钥错」和「被篡改」的差异透露给攻击者。
+        return None
+
+    if not isinstance(body, dict):
+        return None
+
+    iat = body.pop("iat", None)
+    if not isinstance(iat, int) or time.time() - iat > config.COOKIE_MAX_AGE:
+        return None
+
+    # 载荷结构校验：缺字段的会话继续往下走会在业务层炸出 KeyError（500），
+    # 不如在这里判定为未登录（401），语义也更准确。
+    if not all(k in body for k in ("uid", "username", "pat")):
+        return None
+    return body
 
 
 def set_session(response: Response, payload: dict) -> None:
-    token = _serializer.dumps(payload)
     response.set_cookie(
         key=config.COOKIE_NAME,
-        value=token,
+        value=_encrypt(payload),
         max_age=config.COOKIE_MAX_AGE,
         httponly=True,
-        samesite="lax",
-        secure=False,  # 生产环境走 HTTPS 时改为 True
+        samesite=config.COOKIE_SAMESITE,
+        secure=config.COOKIE_SECURE,
         path="/",
     )
 
 
 def clear_session(response: Response) -> None:
-    response.delete_cookie(config.COOKIE_NAME, path="/")
+    # 属性需与 set_session 一致：浏览器按 name+path+domain 匹配删除，属性不一致时
+    # 部分浏览器会当成另一条 Cookie 写入，导致旧会话残留、登出失效。
+    response.delete_cookie(
+        config.COOKIE_NAME,
+        path="/",
+        httponly=True,
+        samesite=config.COOKIE_SAMESITE,
+        secure=config.COOKIE_SECURE,
+    )
 
 
 def read_session(request: Request) -> Optional[dict]:
     token = request.cookies.get(config.COOKIE_NAME)
     if not token:
         return None
-    try:
-        return _serializer.loads(token, max_age=config.COOKIE_MAX_AGE)
-    except (BadSignature, SignatureExpired):
-        return None
+    return _decrypt(token)
 
 
 def require_session(request: Request) -> dict:

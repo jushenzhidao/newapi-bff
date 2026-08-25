@@ -11,6 +11,10 @@ import pytest
 os.environ.setdefault("BFF_MOCK_MODE", "1")
 os.environ.setdefault("BFF_SECRET_KEY", "test-only-secret-not-for-production")
 
+# TestClient 的 base_url 是明文 http://testserver，Secure Cookie 会被 httpx 丢弃，
+# 导致所有依赖登录态的用例拿到 401。生产默认值是 1，这里显式关掉。
+os.environ.setdefault("BFF_COOKIE_SECURE", "0")
+
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):

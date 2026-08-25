@@ -703,7 +703,8 @@ async def readyz():
 
     检查项都是真实踩过的坑：静态资源没进镜像会让首页 500；data 目录不可写会让
     首充赠送失去幂等（同一用户可反复领取）；SECRET_KEY 用默认值等于任何人都能
-    伪造会话 Cookie 冒充任意用户；管理员凭证缺失会让建号/赠送/兑换码静默瘫痪。
+    伪造会话 Cookie 冒充任意用户、并解出别人 Cookie 里的 PAT（该值经 HKDF 派生
+    出会话加密密钥）；管理员凭证缺失会让建号/赠送/兑换码静默瘫痪。
     """
     checks: dict[str, bool] = {
         "static_assets": (STATIC_DIR / "index.html").is_file(),
@@ -733,17 +734,19 @@ def _state_dir_writable() -> bool:
 
 
 # 已知弱值黑名单。只比对「不等于默认值」是不够的：`BFF_SECRET_KEY=` 传空串时
-# 它确实不等于默认值，但空密钥签出的 Cookie 任何人都能伪造 —— 实测踩到过。
+# 它确实不等于默认值，但空密钥派生出的 AES 密钥是公开可计算的，等于没加密 ——
+# 实测踩到过。
 _WEAK_SECRETS = {"dev-only-secret-change-me", "changeme", "secret", "test"}
 _MIN_SECRET_LEN = 32  # openssl rand -hex 32 给 64 字符，正常配置远超此值
 
 
 def _secret_key_strong() -> bool:
-    """会话签名密钥是否足够强。
+    """会话加密密钥是否足够强。
 
-    密钥弱 = 任何人都能伪造会话 Cookie 冒充任意用户，而 Cookie 里带着该用户的
-    new-api PAT。这是宁可不启动也不能放过的配置错误，所以判定从严：
-    空值、过短、已知弱值一律不通过。
+    自 Cookie 改为 AES-256-GCM 加密后（app/security.py），这个值经 HKDF 派生出
+    AES 密钥，它同时承担两件事：机密性（PAT 不可读）与完整性（会话不可伪造）。
+    密钥弱 = 攻击者既能伪造会话冒充任意用户，也能解出别人 Cookie 里的 PAT。
+    这是宁可不启动也不能放过的配置错误，判定从严：空值、过短、已知弱值一律不通过。
     """
     key = (config.SECRET_KEY or "").strip()
     return len(key) >= _MIN_SECRET_LEN and key.lower() not in _WEAK_SECRETS

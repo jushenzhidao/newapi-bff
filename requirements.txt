@@ -1,4 +1,9 @@
 fastapi==0.115.*
 uvicorn[standard]==0.30.*
-itsdangerous==2.2.*
 httpx==0.27.*
+
+# 会话 Cookie 的 AES-256-GCM 加解密（app/security.py）。
+# 已移除 itsdangerous：它只签名不加密，载荷是 base64 明文 JSON，而会话里装着
+# 用户的 new-api PAT —— 任何读到 Cookie 字符串的人无需密钥即可直接解出。
+# 钉死小版本：加密是安全边界，不接受 * 通配带来的意外升级。
+cryptography==43.0.3

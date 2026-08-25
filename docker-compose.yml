@@ -6,46 +6,100 @@
 #   curl -fsS localhost:8000/readyz       # 应返回 status: ready
 #
 # 密钥全部从 .env 读取，不硬编码在本文件里 —— 本文件进仓库，.env 不进。
+#
+# 本文件是**纯生产编排**，不提供业务/安全层面的降级开关：
+#   - 无 mock 模式开关，避免误开后对着假数据运营
+#   - 无 Cookie Secure 降级开关，避免生产误关明文传输保护
+#   - 关键配置缺失即拒绝启动（${VAR:?} 语法），不起一个错配的服务
+#
+# 唯一保留的可覆盖项是 PYTHON_IMAGE —— 它是**构建期基础设施**而非运行期行为，
+# 拉不到镜像时阻塞部署没有任何安全收益（实测 Docker Hub 会 Bad Gateway）。
+# 本地调试请直接跑 uvicorn 并用环境变量覆盖，不要改这个文件。
 
 services:
   bff:
     build:
       context: .
       args:
-        APP_VERSION: ${APP_VERSION:-dev}
-        VCS_REF: ${VCS_REF:-unknown}
-        # 拉不到 3.13 时（内网 / 镜像站滞后）可降到 3.12，代码兼容 >=3.12。
-        # 也可换成私有 registry 前缀，如 my-mirror/library/python:3.13-slim
+        # 版本标签不给默认值：镜像里跑的是哪个 commit 必须可回溯，
+        # 让它悄悄变成 dev/unknown 等于放弃线上问题的追溯能力。
+        APP_VERSION: ${APP_VERSION:?APP_VERSION 必须设置，如 1.2.0 或 git describe 的输出}
+        VCS_REF: ${VCS_REF:?VCS_REF 必须设置，用 git rev-parse --short HEAD}
+        # 基础镜像默认 3.13，但**保留可覆盖**：这是构建期基础设施，不是运行期
+        # 安全行为。实测 Docker Hub 会返回 Bad Gateway 拉不到 3.13，此时写死
+        # 只会让部署整个卡住，没有任何安全收益。
+        # 代码 requires-python = ">=3.12"，降到 3.12 是官方支持的：
+        #   PYTHON_IMAGE=python:3.12-slim docker compose build
+        # 也可指向私有 registry：PYTHON_IMAGE=my-mirror/library/python:3.13-slim
         PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.13-slim}
-    image: newapi-bff:${APP_VERSION:-dev}
+    image: newapi-bff:${APP_VERSION}
     container_name: newapi-bff
     restart: unless-stopped
 
     # 只发布到回环地址：生产由宿主机的 Nginx/Caddy 负责 TLS 终止与转发。
-    # 直接暴露 0.0.0.0:8000 意味着明文 HTTP 对公网可达，而会话 Cookie 里带着
-    # 用户的 new-api PAT，被中间人抓到等于账号失守。
+    #
+    # 注意这里防的不是「反代那条链路被窃听」—— 用域名反代时浏览器到反代是密文，
+    # 反代到容器走回环不出网卡。真正要封的是**绕过反代的旁路**：只要监听
+    # 0.0.0.0:8000，任何人都能 curl http://<公网IP>:8000 全程明文，域名反代
+    # 对这条并行入口毫无约束。会话 Cookie 即便载荷已加密，密文本身仍是可重放
+    # 的登录凭证。
+    #
+    # 另一个必须绑回环的理由：Docker 发布端口时直接往 iptables 的 DOCKER 链插
+    # DNAT 规则，位置在 INPUT 之前 —— 你在 UFW/firewalld 里配的 deny 8000 拦不住它。
+    #
+    # 顺带保证 FORWARDED_ALLOW_IPS=127.0.0.1 的前提成立：请求只可能从回环进来，
+    # 攻击者无法直连并自带伪造的 X-Forwarded-For 绕过按 IP 限流。
     ports:
       - "127.0.0.1:${BFF_PORT:-8000}:8000"
 
     environment:
-      # ---- 必填：会话 Cookie 签名密钥 ----
-      # 缺省值会让 /readyz 直接返回 503，容器起不来是刻意设计（弱密钥 =
-      # 任何人可伪造会话冒充任意用户，宁可不启动也不能带病上线）
+      # ---- 必填：会话 Cookie 加密密钥 ----
+      # 经 HKDF 派生出 AES-256-GCM 密钥，加密会话载荷里的用户 PAT 并防伪造。
+      # 缺省值会让 /readyz 直接返回 503，容器起不来是刻意设计（弱密钥 = 任何人
+      # 可伪造会话冒充用户、并解出其 PAT，宁可不启动也不能带病上线）。
+      # 改这个值会让所有在线会话立即失效，轮换请安排在低峰期。
       BFF_SECRET_KEY: ${BFF_SECRET_KEY:?BFF_SECRET_KEY 必须设置，用 openssl rand -hex 32 生成}
 
       # ---- 上游 new-api ----
-      NEWAPI_BASE_URL: ${NEWAPI_BASE_URL:-https://api.aihuobao.cn}
-      # 强烈建议用 PAT 而非账密：PAT 不经过 new-api 的会话系统，
-      # 可绕开「50 会话硬上限打满后 login 永久 409」这个最高危单点故障
-      NEWAPI_ADMIN_PAT: ${NEWAPI_ADMIN_PAT:-}
-      NEWAPI_ADMIN_UID: ${NEWAPI_ADMIN_UID:-0}
-      NEWAPI_ADMIN_USERNAME: ${NEWAPI_ADMIN_USERNAME:-}
-      NEWAPI_ADMIN_PASSWORD: ${NEWAPI_ADMIN_PASSWORD:-}
+      # 不给默认值：默认指向某个具体站点，一旦部署方忘了配，BFF 会静默把
+      # 全部用户流量打到别人的实例上。宁可起不来。
+      NEWAPI_BASE_URL: ${NEWAPI_BASE_URL:?NEWAPI_BASE_URL 必须设置，如 https://api.example.com}
+
+      # ---- 管理员凭证：PAT 必填，账密作为自愈通道也必填 ----
+      # PAT 走 users.access_token 列，完全不经过 new-api 的会话系统，
+      # 从根本绕开「50 会话硬上限打满后 login 永久 409」这个最高危单点故障。
+      # 获取：管理员在 new-api 前端「个人设置 → 系统访问令牌」生成。
+      NEWAPI_ADMIN_PAT: ${NEWAPI_ADMIN_PAT:?NEWAPI_ADMIN_PAT 必须设置，在 new-api「个人设置 → 系统访问令牌」生成}
+      NEWAPI_ADMIN_UID: ${NEWAPI_ADMIN_UID:?NEWAPI_ADMIN_UID 必须设置，即管理员账号的用户 ID}
+
+      # 账密不是「PAT 的替代品」，而是 PAT 失效后的**唯一自愈通道**，生产同样必填。
+      # 原因：GET /api/user/token 每次调用都会重新生成 PAT 并作废旧值，管理员在
+      # 官方前端点一次「系统访问令牌」就会让这里配的 PAT 失效。此时
+      # newapi_client.py:201 的 401 分支会用账密重新换取；没有账密就永久瘫痪，
+      # 只能靠人工改环境变量 + 重启才能恢复。
+      NEWAPI_ADMIN_USERNAME: ${NEWAPI_ADMIN_USERNAME:?NEWAPI_ADMIN_USERNAME 必须设置，作为 PAT 失效后的自愈通道}
+      NEWAPI_ADMIN_PASSWORD: ${NEWAPI_ADMIN_PASSWORD:?NEWAPI_ADMIN_PASSWORD 必须设置，作为 PAT 失效后的自愈通道}
 
       # ---- 运行模式 ----
-      BFF_MOCK_MODE: ${BFF_MOCK_MODE:-0}
+      # 写死 0：mock 模式接的是内存假数据，误开等于对着假余额假日志运营。
+      # 生产编排里不提供这个开关。
+      BFF_MOCK_MODE: "0"
+
+      # 写死 1：回环绑定只挡住服务端旁路，挡不住客户端在明文 HTTP 下把 Cookie
+      # 发出去。Cookie 载荷虽已 AES-GCM 加密，但密文本身仍是可重放的登录凭证。
+      # 生产不提供关闭途径。
+      BFF_COOKIE_SECURE: "1"
+
+      # SameSite 默认 lax，**不要改成 strict**（除非本站不做在线支付）：
+      # 用户从支付网关点「返回商户」是跨站顶层导航，strict 下浏览器不带 Cookie，
+      # 落地后显示未登录、看不到充值结果 —— 而钱已经到账（走 notify_url），
+      # 极易被当成「付了钱没到账」引发客诉。
+      # lax 只放行顶层导航的 GET/HEAD，本项目所有写操作都是 POST，防护已足够。
+      BFF_COOKIE_SAMESITE: ${BFF_COOKIE_SAMESITE:-lax}
 
       # ---- 积分与活动 ----
+      # 这几项是运营策略而非安全项，保留默认值。但注意它们直接决定真金白银的
+      # 赠送额度：PROMO_* 默认是开启的，不想做活动必须显式设 0，别指望默认关闭。
       BFF_POINTS_PER_CNY: ${BFF_POINTS_PER_CNY:-10000}
       BFF_PROMO_SIGNUP_ENABLED: ${BFF_PROMO_SIGNUP_ENABLED:-1}
       BFF_PROMO_SIGNUP_POINTS: ${BFF_PROMO_SIGNUP_POINTS:-20000}
@@ -53,14 +107,20 @@ services:
       BFF_PROMO_FIRST_TOPUP_RATE: ${BFF_PROMO_FIRST_TOPUP_RATE:-1.0}
 
       # ---- 品牌 ----
+      # 留空不影响功能，只是页面上少显示对应信息。
+      # 国内公网运营需要 ICP 备案号，按合规要求填写。
       BFF_BRAND_NAME: ${BFF_BRAND_NAME:-NexusAPI}
       BFF_API_BASE_URL: ${BFF_API_BASE_URL:-}
       BFF_BRAND_ICP: ${BFF_BRAND_ICP:-}
       BFF_BRAND_CONTACT: ${BFF_BRAND_CONTACT:-}
 
-      # 反代与容器同宿主时，请求经 docker 网桥进来，源 IP 是网桥网段而非
-      # 127.0.0.1，需按实际网段放行，否则 XFF 会被 uvicorn 丢弃、
-      # 限流全落到同一个 IP 上。
+      # ---- 反代信任来源 ----
+      # 默认 127.0.0.1 对应「反代与容器共享 network namespace」的少数情况。
+      # 更常见的是反代在宿主机、请求经 docker 网桥进来，此时源 IP 是网桥网段
+      # （如 172.17.0.1），必须按实际网段放行，否则 uvicorn 丢弃 XFF、
+      # 限流会把所有用户当成同一个 IP 误伤。
+      # 用 docker network inspect bridge 查实际网段。绝不能填 *（等于允许任意
+      # 客户端自带伪造 XFF 绕过按 IP 限流）。
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
 
     # promo_state.json（赠送幂等）与 admin_cred.json（管理员 PAT）都在这里。

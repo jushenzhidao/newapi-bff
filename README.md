@@ -212,7 +212,9 @@ if activeCount >= int64(common.UserSessionActiveLimit) {   // 默认 50
 
 ## 关键实现点
 
-- **PAT 而非 access_token**：登录后立刻用 15 分钟 access_token 换长期 PAT 存签名 Cookie。
+- **PAT 而非 access_token**：登录后立刻用 15 分钟 access_token 换长期 PAT，
+  存进 **AES-256-GCM 加密**的 Cookie（不是仅签名 —— 签名的载荷是 base64 明文，
+  谁拿到 Cookie 都能读出 PAT）。
   注意 `GET /api/user/token` 每次调用都会**重新生成 PAT 并作废旧值**，所以管理员 PAT 不能硬编码，
   由 `newapi_client._admin_login()` 动态换取并缓存，401 自动刷新重试。
 - **支付到账判定**：`POST /api/user/pay/status` 用「下单时余额快照」比对。
@@ -235,7 +237,7 @@ app/
   redeem_code.py    # 兑换码登录：前置校验 + HMAC 确定性派生 + 建号核销
   newapi_client.py  # 真实代理 + 已核实契约笔记（含 find_redemption 分页查码）
   store.py          # mock 模式内存数据层
-  security.py       # 签名 Cookie 会话
+  security.py       # 加密 Cookie 会话（AES-256-GCM）
   config.py         # 积分换算 + 活动配置
 static/
   index.html / app.js / style.css   # SPA（hash 路由，原生 JS）

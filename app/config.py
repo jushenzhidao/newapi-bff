@@ -14,7 +14,30 @@ def _int(name: str, default: int) -> int:
 
 
 def _bool(name: str, default: bool) -> bool:
-    return os.getenv(name, "1" if default else "0").strip().lower() in ("1", "true", "yes", "on")
+    """解析布尔环境变量；未设置或留空时回落到 default。
+
+    空值必须回落而不能当 False：.env 里留一行 `BFF_COOKIE_SECURE=` 或 compose
+    把未定义变量展开成空串都很常见，若按 False 处理，等于让一个笔误静默关掉
+    安全开关（Secure Cookie 就是这么丢的）。
+
+    无法识别的值（如 `garbage`）仍按 False，与显式关闭同义 —— 这里不抛异常是
+    刻意的：配置解析失败让整个进程起不来，收益不如让 /readyz 去做语义校验。
+    """
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _choice(name: str, default: str, allowed: tuple[str, ...]) -> str:
+    """解析枚举型环境变量；未设置、留空或取值非法时回落到 default。
+
+    非法值回落而不抛异常：这类值（如 Cookie 的 SameSite）写错时，
+    让进程带着一个无效属性启动比直接崩更危险 —— 浏览器会静默忽略非法属性，
+    等于降级到无防护。回落到安全默认值并保证可预期。
+    """
+    raw = (os.getenv(name) or "").strip().lower()
+    return raw if raw in allowed else default
 
 
 MOCK_MODE: bool = os.getenv("BFF_MOCK_MODE", "0") == "1"
@@ -48,11 +71,41 @@ ADMIN_CRED_FILE: str = os.getenv(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "admin_cred.json"),
 )
 
-# 会话 Cookie 签名密钥 —— 生产必须用环境变量注入随机值
+# 会话 Cookie 加密密钥 —— 生产必须用环境变量注入随机值。
+# security.py 用它经 HKDF-SHA256 派生 AES-256-GCM 密钥，兼顾机密性（载荷里的
+# 用户 PAT 不可读）与完整性（会话不可伪造）。
+# 注意：换这个值会让所有在线会话立即失效（旧密文解不开）。
 SECRET_KEY: str = os.getenv("BFF_SECRET_KEY", "dev-only-secret-change-me")
 
 COOKIE_NAME = "bff_session"
 COOKIE_MAX_AGE = 7 * 24 * 3600  # 7 天；PAT 长期有效，不受 new-api 15min access_token 限制
+
+# 会话 Cookie 的 Secure 属性 —— 默认 True（安全默认值，不依赖部署方记得开）。
+# 置 False 后浏览器会在明文 HTTP 请求里也带上这个 Cookie，而 Cookie 载荷含用户的
+# new-api PAT：用户手输 http://域名、混合内容、SSL Strip 都会导致 PAT 明文上网。
+# 回环绑定只封住服务端旁路，管不到客户端这一侧，故此处必须默认开启。
+#
+# 唯一该置 0 的场景：本地开发用 http://127.0.0.1 访问。Secure Cookie 在明文
+# http 下浏览器直接丢弃（localhost 例外因浏览器而异，别赌），登录会静默失败。
+COOKIE_SECURE: bool = _bool("BFF_COOKIE_SECURE", True)
+
+# 会话 Cookie 的 SameSite 属性 —— 默认 lax，这是**刻意的选择**，不是图省事。
+#
+# 为什么不用 strict：用户在支付网关点「返回商户」跳回本站，属于跨站顶层导航。
+# strict 下浏览器不带 Cookie，用户落到 SPA 会显示未登录、看不到充值结果，
+# 必须重新登录一次 —— 而钱其实已经到账（走 notify_url，见 main.py 的回跳注释），
+# 这个体验落差极容易被当成「付了钱没到账」而引发客诉。
+#
+# lax 的防护已经够用：它只放行顶层导航的安全方法（GET/HEAD），
+# 本项目所有写操作都是 POST，跨站发起时一律不带 Cookie。
+# 也就是说 lax → strict 换来的安全增量很小，代价却是支付回跳必须重新登录。
+#
+# 允许配成 strict 是给「不做在线支付」的部署形态留的口子（此时无跨站回跳，
+# strict 没有副作用）。取值只接受 lax / strict / none，非法值回落到 lax。
+#
+# 注意 none 必须配合 secure=True 才被浏览器接受，且等于完全放弃 SameSite 防护，
+# 除非确有跨站嵌入需求，否则不要用。
+COOKIE_SAMESITE: str = _choice("BFF_COOKIE_SAMESITE", "lax", ("lax", "strict", "none"))
 
 
 # ==================== 积分体系（对外唯一计价单位）====================

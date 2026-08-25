@@ -1,9 +1,24 @@
 name: Release
 
-# 只在打 tag 时发布镜像。推镜像是对外可见的发布行为，不该由每次 push 触发。
+# 发布触发：打 v* tag（正式版本）或 push 主干（开发版本）。
+#
+# 两条通道刻意区别对待，见下方「生成镜像标签」步骤：
+#   tag 推送   -> 语义化版本 + latest，供生产部署引用
+#   主干推送   -> 只打分支名与 sha，不动 latest
+# 若主干推送也移动 latest，生产环境 `docker pull latest` 会拉到未经发布决策的
+# 代码，且无法回滚到「上一个正式版本」——latest 必须只由 tag 移动。
 on:
   push:
+    branches: [master, main]
     tags: ["v*"]
+  # 允许在 Actions 页面手动发起，无需命令行打 tag
+  workflow_dispatch:
+
+# 主干连续推送时取消旧运行（避免两次构建竞争同一 sha 标签）；
+# tag 发布不可取消 —— 中途掐掉会留下推了一半的多架构清单。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 permissions:
   contents: read
@@ -69,15 +84,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 版本号统一在这里算一次，供 build-arg 与冒烟校验共用。
+      # 不直接用 github.ref_name：主干推送时它是「master」，写进镜像标签后
+      # 线上 /healthz 只会显示 master，无法回溯到具体提交。
+      - name: 计算版本号
+        id: ver
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            v="${{ github.ref_name }}"
+          else
+            # 取 sha 前 7 位，与 metadata-action 的 sha-<short> 标签保持一致，
+            # 便于从 /healthz 的版本号直接反查镜像标签
+            short="${{ github.sha }}"
+            v="${{ github.ref_name }}-${short:0:7}"
+          fi
+          echo "value=$v" >> "$GITHUB_OUTPUT"
+          echo "本次发布版本号：$v"
+
       - name: 生成镜像标签
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          # semver 系列只在 tag 事件生效，branch 事件自动跳过（action 内建行为）。
+          # latest 用 enable 显式限定为 tag 事件 —— 默认规则会把主干推送也算作
+          # latest，那会让生产 pull latest 拿到未发布的代码。
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
             type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
 
       # 先 load 到本地做冒烟，通过后才 push —— 避免把起不来的镜像推出去
       - name: 构建镜像（本地）
@@ -87,7 +124,7 @@ jobs:
           load: true
           tags: newapi-bff:candidate
           build-args: |
-            APP_VERSION=${{ github.ref_name }}
+            APP_VERSION=${{ steps.ver.outputs.value }}
             VCS_REF=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -111,9 +148,11 @@ jobs:
           done
           echo "候选镜像就绪：$(cat /tmp/r.json)"
 
-          # 版本号必须被正确注入，否则线上无法回溯跑的是哪个版本
+          # 版本号必须被正确注入，否则线上无法回溯跑的是哪个版本。
+          # 比对用 steps.ver 而非 github.ref_name：主干推送时后者是「master」，
+          # 而镜像里注入的是「master-<sha>」，用 ref_name 比对会漏掉 sha 丢失的情况。
           got=$(curl -fsS http://127.0.0.1:8000/healthz | grep -o '"version":"[^"]*"')
-          echo "$got" | grep -q "${{ github.ref_name }}" \
+          echo "$got" | grep -q "${{ steps.ver.outputs.value }}" \
             || { echo "::error::镜像版本号未正确注入：$got"; exit 1; }
 
           docker rm -f bff-rc > /dev/null
@@ -126,7 +165,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            APP_VERSION=${{ github.ref_name }}
+            APP_VERSION=${{ steps.ver.outputs.value }}
             VCS_REF=${{ github.sha }}
           cache-from: type=gha
 

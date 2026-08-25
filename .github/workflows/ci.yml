@@ -174,17 +174,40 @@ jobs:
           done
 
       - name: 校验 compose 配置有效
+        env:
+          # compose 是纯生产编排，全部必填项齐全才能渲染
+          APP_VERSION: ci-${{ github.sha }}
+          VCS_REF: ${{ github.sha }}
+          NEWAPI_BASE_URL: https://api.example.com
+          NEWAPI_ADMIN_PAT: ci-dummy-pat
+          NEWAPI_ADMIN_UID: "1"
+          NEWAPI_ADMIN_USERNAME: ci-dummy-user
+          NEWAPI_ADMIN_PASSWORD: ci-dummy-pw
         run: |
           # 拦「compose 文件语法错 / 变量插值写错」这类只在部署时才炸的问题
           BFF_SECRET_KEY=$(openssl rand -hex 32) docker compose config -q
           echo "compose 配置有效"
 
-          # BFF_SECRET_KEY 未设置时 compose 必须拒绝启动（:? 语法生效）
-          if docker compose config -q 2>/dev/null; then
-            echo "::error::未设置 BFF_SECRET_KEY 时 compose 仍通过校验"
-            exit 1
-          fi
-          echo "缺失 BFF_SECRET_KEY 已被 compose 拦下"
+          # 生产不该出现的降级值必须在渲染结果里写死，而不是可被 .env 覆盖
+          rendered=$(BFF_SECRET_KEY=$(openssl rand -hex 32) docker compose config)
+          echo "$rendered" | grep -q 'BFF_MOCK_MODE: "0"' \
+            || { echo "::error::BFF_MOCK_MODE 未写死为 0"; exit 1; }
+          echo "$rendered" | grep -q 'BFF_COOKIE_SECURE: "1"' \
+            || { echo "::error::BFF_COOKIE_SECURE 未写死为 1"; exit 1; }
+          echo "$rendered" | grep -q 'host_ip: 127.0.0.1' \
+            || { echo "::error::端口未绑定到回环地址"; exit 1; }
+          echo "生产写死项校验通过（MOCK=0 / COOKIE_SECURE=1 / 端口绑回环）"
+
+          # 逐个抽掉必填项，compose 都必须拒绝渲染（:? 语法生效）
+          for missing in BFF_SECRET_KEY APP_VERSION NEWAPI_BASE_URL \
+                         NEWAPI_ADMIN_PAT NEWAPI_ADMIN_USERNAME; do
+            if env BFF_SECRET_KEY=$(openssl rand -hex 32) "$missing=" \
+                 docker compose config -q 2>/dev/null; then
+              echo "::error::缺失 $missing 时 compose 仍通过校验"
+              exit 1
+            fi
+            echo "缺失 $missing 已被 compose 拦下"
+          done
 
       - name: 收集容器日志
         if: always()

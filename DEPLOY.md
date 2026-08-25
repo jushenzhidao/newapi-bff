@@ -6,46 +6,105 @@
 
 ```bash
 cp .env.example .env
-openssl rand -hex 32          # 把输出填进 .env 的 BFF_SECRET_KEY
-vim .env                      # 再填 NEWAPI_ADMIN_PAT / NEWAPI_ADMIN_UID
+openssl rand -hex 32          # 输出填进 .env 的 BFF_SECRET_KEY
+vim .env                      # 填完下面「必填项」一节列出的全部变量
 
+export APP_VERSION=$(git describe --tags --always) VCS_REF=$(git rev-parse --short HEAD)
 docker compose up -d --build
 curl -fsS localhost:8000/readyz    # 应返回 {"status":"ready",...}
 ```
 
 `/readyz` 返回 503 就是配置有问题，`failed` 数组会指出具体哪一项。
 
-## 两个必须配对的环境变量
+## compose 是纯生产编排，没有降级开关
+
+`docker-compose.yml` 刻意不提供任何兼容 / 降级选项：
+
+| 项 | 处理 | 原因 |
+|---|---|---|
+| `BFF_MOCK_MODE` | 写死 `0` | 误开等于对着内存假余额、假日志运营 |
+| `BFF_COOKIE_SECURE` | 写死 `1` | 关掉会让登录凭证在明文 HTTP 上传输 |
+| 必填变量 | `${VAR:?}` 语法 | 缺失时 `docker compose up` 直接报错退出，不起一个错配的服务 |
+| `PYTHON_IMAGE` | **保留可覆盖** | 构建期基础设施，非运行期行为（见下） |
+
+**为什么 `PYTHON_IMAGE` 是例外**：它影响的是构建能否完成，不是服务的运行时
+行为。实测 Docker Hub 会返回 `Bad Gateway` 拉不到 `python:3.13-slim`，此时写死
+版本只会让部署整个卡住，没有任何安全收益。代码 `requires-python = ">=3.12"`，
+降级到 3.12 是官方支持的：
+
+```bash
+PYTHON_IMAGE=python:3.12-slim docker compose build
+# 或指向私有 registry
+PYTHON_IMAGE=my-mirror/library/python:3.13-slim docker compose build
+```
+
+**本地开发不要改这个文件**，直接跑 uvicorn 并用环境变量覆盖：
+
+```bash
+BFF_MOCK_MODE=1 BFF_COOKIE_SECURE=0 BFF_SECRET_KEY=$(openssl rand -hex 32) \
+  uvicorn app.main:app --reload
+```
+
+## 必填项
+
+以下变量缺任何一个，compose 都会拒绝启动并打印带修复提示的错误。
 
 ### BFF_SECRET_KEY
 
-会话 Cookie 的签名密钥，**必填**。
+会话 Cookie 的**加密**密钥。经 HKDF-SHA256 派生出 AES-256-GCM 密钥。
 
 Cookie 里存着用户的 new-api PAT。密钥可猜 = 任何人都能伪造 Cookie 冒充任意
-用户并拿到其 PAT。所以 `/readyz` 对它从严判定：空值、少于 32 字符、或命中已知
+用户，**并解密出其 PAT**。所以 `/readyz` 对它从严判定：空值、少于 32 字符、或命中已知
 弱值列表，一律返回 503 让容器进不了健康状态。宁可不启动，也不带病上线。
 
-compose 里用了 `${BFF_SECRET_KEY:?...}`，没设置时 `docker compose up` 直接报错
-退出，不会起一个能被伪造会话的服务。
+**轮换这个值会让全部在线会话立即失效**（旧密文解不开），请安排在低峰期。
 
-### NEWAPI_ADMIN_PAT + NEWAPI_ADMIN_UID
+### NEWAPI_BASE_URL
 
-强烈建议配置，用来替代管理员账密。
+上游 new-api 地址。**不给默认值是刻意的**：默认指向某个具体站点时，
+一旦部署方忘配，BFF 会静默把全部用户流量打到别人的实例上。
 
-new-api 的会话上限是 50，**硬拒绝、不淘汰最旧会话、TTL 30 天**。BFF 用账密
-`login` 换 PAT 时每次消耗一个会话配额，一旦打满，`login` 会连续 30 天返回 409，
+### 管理员凭证：PAT 与账密都必填
+
+这两组**不是替代关系**，各自解决不同问题，生产环境都要配。
+
+**`NEWAPI_ADMIN_PAT` + `NEWAPI_ADMIN_UID`（主通道）**
+
+new-api 的会话上限是 50，**硬拒绝、不淘汰最旧会话、TTL 30 天**。用账密
+`login` 换 PAT 每次消耗一个会话配额，一旦打满，`login` 连续 30 天返回 409，
 建号、加额度、兑换码全线瘫痪 —— 这是整个系统最高危的单点故障。
 
-PAT 走 `users.access_token` 列，完全不经过会话系统。配了它，BFF 就再也不需要
-调 `login`，从根本上绕开该问题。
-
+PAT 走 `users.access_token` 列，完全不经过会话系统，配了它常态运行不再调 `login`。
 获取方式：管理员在 new-api 前端「个人设置 → 系统访问令牌」生成。
+
+**`NEWAPI_ADMIN_USERNAME` + `NEWAPI_ADMIN_PASSWORD`（自愈通道）**
+
+`GET /api/user/token` 每次调用都会**重新生成 PAT 并作废旧值**，管理员在官方
+前端点一次「系统访问令牌」，配置里的 PAT 就失效了。此时 `newapi_client.py`
+的 401 分支会用账密自动重新换取并落盘缓存。
+
+没有账密 = PAT 一失效就永久瘫痪，只能人工改配置 + 重启才能恢复。
+
+### APP_VERSION + VCS_REF
+
+镜像版本标签与 git commit。不给默认值的理由：让它悄悄落到 `dev`/`unknown`
+等于放弃线上问题的回溯能力，出事时无法确定跑的是哪份代码。
 
 ## 反向代理
 
 compose 只把端口发布到 `127.0.0.1`，TLS 由宿主机的 Nginx/Caddy 终止。
-直接暴露 `0.0.0.0:8000` 意味着明文 HTTP 对公网可达，而会话 Cookie 里带着用户
-的 PAT，被抓到等于账号失守。
+
+这里防的不是「反代链路被窃听」—— 用域名反代时浏览器到反代是密文，反代到容器
+走回环不出网卡。要封的是**绕过反代的旁路**：只要监听 `0.0.0.0:8000`，任何人都能
+`curl http://<公网IP>:8000` 全程明文，域名反代对这条并行入口毫无约束。
+
+还有两个容易忽略的点：
+
+- **Docker 会绕过宿主防火墙。** 发布端口时它直接往 iptables 的 `DOCKER` 链插
+  DNAT 规则，位置在 `INPUT` 之前，你在 UFW/firewalld 里配的 `deny 8000` 拦不住。
+  绑回环是唯一可靠的兜底。
+- **`FORWARDED_ALLOW_IPS` 的前提。** 它成立的基础是请求只可能从回环进来。
+  端口对外开放时，攻击者可直连并自带伪造的 `X-Forwarded-For`，按 IP 限流被绕过。
 
 Nginx 示例：
 
@@ -79,11 +138,59 @@ server {
 
 不要填 `*`：那等于允许任意客户端自带一个伪造 XFF 绕过上游限流。
 
-### 上 HTTPS 后要改的一处代码
+### 会话 Cookie：加密 + Secure
 
-`app/security.py:25` 的 Cookie `secure=False`。走 HTTPS 后应改为 `True`，
-否则 Cookie 仍会在明文 HTTP 请求中被发送。这一项不在本次部署改动范围内，
-上线前需确认。
+Cookie 载荷是 `{uid, username, pat}`，其中 `pat` 是**用户的 new-api PAT，长期有效**。
+它有两层保护，二者解决的问题不同，都不能省：
+
+**第一层：AES-256-GCM 加密载荷（`app/security.py`）**
+
+密钥由 `BFF_SECRET_KEY` 经 HKDF-SHA256 派生。Cookie 形如 `v2.<nonce>.<密文>`，
+拿到字符串也解不出 PAT，GCM 的认证标签同时保证不可篡改。
+
+历史问题：早期用 `itsdangerous` 只做**签名不做加密**，载荷是 base64 明文 JSON，
+**不需要密钥就能直接解出 PAT**。签名只保证载荷没被改过，不保证不可读。
+这条泄露路径远不止「中间人抓包」——devtools、崩溃转储、把请求头贴进工单、
+CDN/WAF 请求留存、用户截图求助，全都算。
+
+由此产生两条运维约束：
+- `BFF_SECRET_KEY` 现在同时是**加密密钥**，弱密钥等于没加密。`/readyz` 会拦
+  空值、短于 32 字符、以及已知弱值，不通过直接 503。
+- **换 `BFF_SECRET_KEY` 会让全部在线会话失效**（旧密文解不开），用户需重新登录。
+  轮换密钥请安排在低峰期。
+
+**第二层：`BFF_COOKIE_SECURE`（默认 1，生产保持默认）**
+
+加密保护的是「Cookie 内容不可读」，Secure 保护的是「Cookie 不走明文信道」。
+即使载荷已加密，密文本身仍是有效的登录凭证——被截获即可重放冒充该用户。
+
+置 0 的后果：浏览器会在明文 HTTP 请求里也带上会话 Cookie。用户手输
+`http://域名`、页面混合内容、SSL Strip 都会导致凭证暴露。端口绑 `127.0.0.1`
+只封住服务端旁路，管不到客户端这一侧。
+
+唯一该置 0 的场景是本地开发用 `http://127.0.0.1` 直连 —— Secure Cookie 在明文
+http 下会被浏览器丢弃，不置 0 则登录静默失败（表现为登录接口 200 但后续请求 401）。
+
+**第三层：`BFF_COOKIE_SAMESITE`（默认 `lax`）**
+
+**做在线支付就不要改成 `strict`。**
+
+用户在支付网关点「返回商户」跳回本站，属于**跨站顶层导航**。`strict` 下浏览器
+不带 Cookie，用户落地后显示未登录、看不到充值结果 —— 而钱其实**已经到账**
+（走 `notify_url`，与浏览器跳哪儿无关，见下一节）。这个落差极易被当成
+「付了钱没到账」而引发客诉。
+
+`lax` 的防护已经够用：它只放行顶层导航的安全方法（GET/HEAD），本项目所有写
+操作都是 POST，跨站发起时一律不带 Cookie。`lax → strict` 换来的安全增量很小，
+代价却是支付回跳必须重新登录。
+
+仅当本站完全不做在线支付时，才值得收紧到 `strict`。取值只接受
+`lax`/`strict`/`none`，**非法值静默回落到 `lax`** —— 因为浏览器会忽略无法识别的
+属性值，等于降级到无防护，回落到安全默认值更可预期。
+
+**升级到本版本时**：旧的签名格式 Cookie 一律失效（刻意不做兼容），
+所有在线用户会被登出一次。考虑到明文 PAT 已存在泄露风险，强制刷新一轮会话
+本身就是正确的处置。
 
 ## 在线支付：两条回调互不相干
 
