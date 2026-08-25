@@ -123,6 +123,18 @@ services:
       # 客户端自带伪造 XFF 绕过按 IP 限流）。
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
 
+      # ---- 可观测性（Logfire）----
+      # 必须在这里显式声明：本编排刻意不用 env_file，容器只能看到下面列出的变量。
+      # 漏掉这两行的后果是「宿主机 .env 配了 token，Logfire 控制台却一条数据都没有」，
+      # 排查时要看容器内的环境变量（docker compose exec bff env | grep LOGFIRE），
+      # 不要只看宿主机 .env。
+      #
+      # 留空即完全关闭上报，不影响任何业务功能。
+      LOGFIRE_TOKEN: ${LOGFIRE_TOKEN:-}
+      # 区分本地/预发/生产。不给默认值是刻意的：所有环境的数据混在同一标签下，
+      # 等于放弃「线上告警不被本地调试流量淹没」的能力。
+      LOGFIRE_ENVIRONMENT: ${LOGFIRE_ENVIRONMENT:-}
+
     # promo_state.json（赠送幂等）与 admin_cred.json（管理员 PAT）都在这里。
     # 丢了这个卷：所有用户的首充资格会被重置，可被重复领取赠送。
     volumes:
