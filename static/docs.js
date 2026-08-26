@@ -1,0 +1,292 @@
+/* 教程中心渲染器
+ *
+ * 后端把每个产品的教程描述成一组 section（见 docs/products/*.yml），
+ * 这里只负责「section.type -> HTML」的映射。新增一种展现形式＝往 SECTION
+ * 注册表里加一个函数，不需要动路由、不需要动索引页、不需要动后端。
+ *
+ * 依赖 app.js 里已有的 esc / api / renderLayout / MODEL 等全局函数，
+ * 不重复实现，避免出现两套转义逻辑（那是 XSS 的经典来源）。
+ */
+
+/* ---------- 通用小工具 ---------- */
+
+/* 极简 Markdown：只支持档案里实际用到的语法。
+ * 不引三方库是刻意的：教程文案由我们自己写，语法可控，
+ * 引一个 40KB 的解析器去渲染几段加粗和列表不划算。 */
+function docMd(src) {
+  const lines = String(src || "").split("\n");
+  const out = [];
+  let inList = false;
+  const inline = (t) =>
+    esc(t)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) { if (inList) { out.push("</ul>"); inList = false; } continue; }
+    const li = line.match(/^[-*]\s+(.*)$/);
+    if (li) {
+      if (!inList) { out.push('<ul class="doc-ul">'); inList = true; }
+      out.push(`<li>${inline(li[1])}</li>`);
+      continue;
+    }
+    if (inList) { out.push("</ul>"); inList = false; }
+    const h = line.match(/^(#{2,4})\s+(.*)$/);
+    if (h) { out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); continue; }
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  if (inList) out.push("</ul>");
+  return out.join("");
+}
+
+/* 代码块 + 复制按钮。onclick 里传的是 id 而不是代码内容本身，
+ * 否则代码里的引号会把 HTML 属性截断。 */
+let _cbSeq = 0;
+function docCode(code, lang) {
+  const id = `dc${++_cbSeq}`;
+  return `
+    <div class="doc-code">
+      <div class="doc-code-bar">
+        <span class="doc-code-lang">${esc(lang || "bash")}</span>
+        <button class="doc-copy" onclick="docCopy('${id}',this)">复制</button>
+      </div>
+      <pre id="${id}"><code>${esc(code)}</code></pre>
+    </div>`;
+}
+
+async function docCopy(id, btn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  try {
+    await navigator.clipboard.writeText(el.innerText);
+    const old = btn.textContent;
+    btn.textContent = "已复制";
+    btn.classList.add("ok");
+    setTimeout(() => { btn.textContent = old; btn.classList.remove("ok"); }, 1500);
+  } catch (_) {
+    btn.textContent = "复制失败";
+  }
+}
+
+/* ---------- section 渲染注册表 ---------- */
+
+const SECTION = {
+  markdown: (s) => `<div class="card doc-prose">${
+    s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""
+  }${docMd(s.body)}</div>`,
+
+  callout: (s) => `
+    <div class="doc-callout ${esc(s.level || "info")}">
+      ${s.title ? `<b>${esc(s.title)}</b>` : ""}
+      <div>${docMd(s.body)}</div>
+    </div>`,
+
+  code: (s) => `<div class="card">${
+    s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""
+  }${docCode(s.code, s.lang)}</div>`,
+
+  steps: (s) => `
+    <div class="card">
+      ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
+      ${(s.items || []).map((it, i) => `
+        <div class="doc-step">
+          <div class="step-no">${i + 1}</div>
+          <div class="step-body">
+            <b>${esc(it.name)}</b>
+            ${it.body ? docMd(it.body) : ""}
+            ${it.code ? docCode(it.code, it.lang) : ""}
+          </div>
+        </div>`).join("")}
+    </div>`,
+
+  faq: (s) => `
+    <div class="card">
+      <div class="card-title">${esc(s.title || "常见问题")}</div>
+      ${(s.items || []).map((it) => `
+        <details class="doc-faq">
+          <summary>${esc(it.q)}</summary>
+          <div>${docMd(it.a)}</div>
+        </details>`).join("")}
+    </div>`,
+
+  /* 多平台安装：Tab 切换。默认选中第一个平台，而不是猜用户的操作系统 ——
+   * 猜错了用户会照着错误的平台命令去执行。 */
+  platform_tabs: (s) => {
+    const tabs = s.tabs || [];
+    if (!tabs.length) return "";
+    const gid = `pt${++_cbSeq}`;
+    return `
+      <div class="card">
+        ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
+        <div class="doc-tabs" id="${gid}">
+          ${tabs.map((t, i) => `
+            <button class="doc-tab${i === 0 ? " active" : ""}"
+                    onclick="docTab('${gid}',${i},this)">${esc(t.name)}</button>`).join("")}
+        </div>
+        ${tabs.map((t, i) => `
+          <div class="doc-tab-panel" data-g="${gid}" data-i="${i}"
+               style="${i === 0 ? "" : "display:none"}">
+            ${t.body ? docMd(t.body) : ""}
+            ${t.code ? docCode(t.code, t.lang) : ""}
+          </div>`).join("")}
+      </div>`;
+  },
+
+  pricing_table: (s) => renderPricing(s.data || {}),
+};
+
+function docTab(gid, idx, btn) {
+  document.querySelectorAll(`#${gid} .doc-tab`).forEach((b) => b.classList.remove("active"));
+  btn.classList.add("active");
+  document.querySelectorAll(`.doc-tab-panel[data-g="${gid}"]`).forEach((p) => {
+    p.style.display = String(p.dataset.i) === String(idx) ? "" : "none";
+  });
+}
+
+/* ---------- 积分消耗系数表 ---------- */
+
+/* stale 必须显式告知用户并带上快照日期。
+ * 一张没有标注的旧价格表比没有价格表更危险 —— 用户会当成现价去做预算。 */
+function renderPricing(pt) {
+  const unit = pt.unit || "积分";
+  const groups = Object.keys(pt.groups || { default: 1 });
+  const tokenRows = pt.token_models || [];
+  const callRows = pt.per_call_models || [];
+
+  if (!tokenRows.length && !callRows.length) {
+    return `<div class="doc-callout warn">
+      <b>价格表暂时不可用</b>
+      <div>上游定价服务未返回数据，且本地没有可用快照。请稍后刷新，或联系我们获取报价。</div>
+    </div>`;
+  }
+
+  const staleBar = pt.stale
+    ? `<div class="doc-callout warn" style="margin-bottom:12px">
+         <b>当前显示的是缓存价格${pt.snapshot_date ? `（${esc(pt.snapshot_date)}）` : ""}</b>
+         <div>实时定价服务暂时不可用，实际计费以调用时的费率为准。</div>
+       </div>`
+    : "";
+
+  const gh = groups.map((g) => `<th>${esc(g)}</th>`).join("");
+  const gRatio = groups.map((g) => {
+    const r = (pt.groups || {})[g];
+    return `<th><span class="doc-gr">×${r}</span></th>`;
+  }).join("");
+
+  const tokenTable = tokenRows.length ? `
+    <div class="doc-table-title">按 Token 计费<span class="muted">（${esc(unit)} / 1K tokens）</span></div>
+    <div class="doc-table-wrap">
+      <table class="doc-table">
+        <thead>
+          <tr><th rowspan="2">模型</th><th rowspan="2">倍率</th>
+              <th colspan="${groups.length}">输入</th><th colspan="${groups.length}">输出</th></tr>
+          <tr>${gh}${gh}</tr>
+        </thead>
+        <tbody>
+          ${tokenRows.map((m) => `
+            <tr>
+              <td class="doc-model">${esc(m.model)}</td>
+              <td class="muted">${m.ratio}${m.completion_ratio !== 1 ? ` / ${m.completion_ratio}` : ""}</td>
+              ${groups.map((g) => `<td>${m.points_in[g] ?? "—"}</td>`).join("")}
+              ${groups.map((g) => `<td>${m.points_out[g] ?? "—"}</td>`).join("")}
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>` : "";
+
+  const callTable = callRows.length ? `
+    <div class="doc-table-title">按次计费<span class="muted">（${esc(unit)} / 次）</span></div>
+    <div class="doc-table-wrap">
+      <table class="doc-table">
+        <thead><tr><th>模型</th>${gh}</tr><tr><th class="muted">分组倍率</th>${gRatio}</tr></thead>
+        <tbody>
+          ${callRows.map((m) => `
+            <tr><td class="doc-model">${esc(m.model)}</td>
+            ${groups.map((g) => `<td>${m.points_per_call[g] ?? "—"}</td>`).join("")}</tr>`).join("")}
+        </tbody>
+      </table>
+    </div>` : "";
+
+  return `<div class="card">${staleBar}${tokenTable}${callTable}
+    <div class="doc-note">实际扣费 = 基础倍率 × 分组倍率 × 用量。以调用时返回的实际消耗为准。</div>
+  </div>`;
+}
+
+/* ---------- 索引页 ---------- */
+
+async function renderDocs() {
+  document.title = `使用教程 — ${BRAND()}`;
+  renderLayout("/docs", `
+    <div class="page-title">使用教程</div>
+    <div class="page-sub">选择你要接入的产品，查看消耗说明与安装步骤</div>
+    <div id="docsIdx" class="doc-grid"><div class="muted">加载中…</div></div>
+  `);
+
+  let products = [];
+  try {
+    products = (await api("/api/docs")).data.products || [];
+  } catch (e) {
+    document.getElementById("docsIdx").innerHTML =
+      `<div class="doc-callout warn"><b>教程列表加载失败</b><div>${esc(e.message || "请稍后重试")}</div></div>`;
+    return;
+  }
+
+  if (!products.length) {
+    document.getElementById("docsIdx").innerHTML =
+      `<div class="doc-callout info"><b>暂无可用教程</b><div>产品文档正在准备中。</div></div>`;
+    return;
+  }
+
+  document.getElementById("docsIdx").innerHTML = products.map((p) => `
+    <a class="doc-card" href="#/docs/${encodeURIComponent(p.id)}">
+      <div class="doc-card-ico">${ICONS[p.icon] || ICONS.book}</div>
+      <div class="doc-card-main">
+        <b>${esc(p.title)}${p.badge ? `<span class="doc-badge">${esc(p.badge)}</span>` : ""}</b>
+        <p>${esc(p.summary || "")}</p>
+      </div>
+      <span class="doc-card-arrow">→</span>
+    </a>`).join("");
+}
+
+/* ---------- 产品详情页 ---------- */
+
+async function renderDocProduct(id) {
+  renderLayout("/docs", `<div class="muted" style="padding:24px">加载中…</div>`);
+
+  let d;
+  try {
+    d = (await api(`/api/docs/${encodeURIComponent(id)}`)).data;
+  } catch (e) {
+    renderLayout("/docs", `
+      <div class="page-title">教程未找到</div>
+      <div class="doc-callout warn">
+        <b>${esc(e.message || "该产品教程不存在")}</b>
+        <div>可能已下线或链接有误。<a href="#/docs">返回教程中心</a></div>
+      </div>`);
+    return;
+  }
+
+  document.title = `${d.title} — ${BRAND()}`;
+  // 只有带 title 的 section 才进目录，无标题的 callout 不该占一个锚点。
+  const toc = (d.sections || [])
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => s.title && s.type !== "callout");
+
+  renderLayout("/docs", `
+    <div class="doc-crumb"><a href="#/docs">使用教程</a> <span>/</span> ${esc(d.title)}</div>
+    <div class="page-title">${esc(d.title)}</div>
+    ${d.summary ? `<div class="page-sub">${esc(d.summary)}</div>` : ""}
+    ${toc.length > 1 ? `<div class="doc-toc">${
+      toc.map(({ s, i }) => `<a href="#sec-${i}">${esc(s.title)}</a>`).join("")
+    }</div>` : ""}
+    ${(d.sections || []).map((s, i) => {
+      const fn = SECTION[s.type];
+      // 未知 type 直接跳过而不是渲染出错误占位：
+      // 后端新增 section 类型时，旧前端应当优雅降级而非满屏红字。
+      if (!fn) return "";
+      return `<div id="sec-${i}">${fn(s)}</div>`;
+    }).join("")}
+  `);
+}

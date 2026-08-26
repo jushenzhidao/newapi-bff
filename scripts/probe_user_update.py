@@ -1,6 +1,5 @@
 """探测管理员修改用户（改用户名/密码）接口，用于「兑换码用户升级为正式账号」。"""
 import asyncio
-import json
 import os
 import sys
 from pathlib import Path
@@ -38,7 +37,8 @@ async def main():
                         params={"keyword": uname, "p": 1, "page_size": 10})
         items = [i for i in r.json()["data"]["items"] if i["username"] == uname]
         if not items:
-            print("create failed"); return
+            print("create failed")
+            return
         u = items[0]
         tuid = u["id"]
         print("uid:", tuid, "| fields:", sorted(u.keys()))

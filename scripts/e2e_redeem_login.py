@@ -229,7 +229,8 @@ async def main():
             # CODE_B 先由另一个"用户"核销掉，再拿去当登录码
             bff.cookies.clear()
             r = await bff.post("/api/user/login/code", json={"code": CODE_C})
-            uid_c = (await bff.get("/api/user/self")).json()["data"]["id"]
+            # 确认 C 账号登录态已生效再继续（只关心调用成功，不需要返回值）
+            (await bff.get("/api/user/self")).raise_for_status()
             # 用 C 账号把 CODE_B 当普通兑换码充值掉
             r = await bff.post("/api/user/topup", json={"key": CODE_B})
             check("6. C 账号成功消耗掉 CODE_B", r.json().get("success") is True,

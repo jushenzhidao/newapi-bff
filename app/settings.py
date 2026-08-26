@@ -207,6 +207,14 @@ SPECS: dict[str, tuple[str, str, Callable[[Any], Any], str]] = {
                      "示例代码里展示的 base_url"),
     "DOC_DEFAULT_MODEL": ("doc", "示例默认模型", _s(80, allow_empty=False), ""),
     "DOC_MODELS": ("doc", "展示模型清单", _str_list(), "逗号分隔"),
+    "DOC_PRODUCTS": ("doc", "上架产品清单", _str_list(),
+                     "逗号分隔的产品 id，留空 = 全部上架；填了不存在的 id 会在 /readyz 报错"),
+
+    # ---- 定价表 ----
+    "PRICING_TTL": ("pricing", "定价缓存秒数", _i(0, 86_400),
+                    "0 = 每次请求都回源，仅调试用"),
+    "PRICING_GROUPS": ("pricing", "展示分组白名单", _str_list(),
+                       "留空 = 全部分组；用于隐藏 keypool 等内部分组"),
     "REDEEM_LOGIN_ENABLED": ("feature", "开放兑换码登录", _b,
                              "关闭后登录页不显示该入口，接口也拒绝"),
 }
@@ -217,6 +225,7 @@ GROUP_LABELS = {
     "pay": "充值档位",
     "promo": "运营活动",
     "doc": "接入文档",
+    "pricing": "定价表",
     "feature": "功能开关",
 }
 
@@ -287,6 +296,46 @@ def invalidate() -> None:
     _cache = None
 
 
+# 改动这些键会让已缓存的定价表口径失效：
+# POINTS_PER_CNY 变了则系数全部要重算，PRICING_* 变了则表的范围/时效要变。
+# 不挂这个钩子的表现是「管理页保存成功、价格表数字纹丝不动」，
+# 而且等 TTL 过期后又会自己变对 —— 这种间歇性不一致极难排查。
+_PRICING_CACHE_KEYS = frozenset({
+    "POINTS_PER_CNY", "POINTS_UNIT_NAME", "PRICING_TTL", "PRICING_GROUPS",
+})
+
+
+# 改动这些键会让已缓存的产品档案失效。档案在加载时就把 {{brand}}、{{api_base}}
+# 等占位替换成了实际值并缓存，所以这些源值一变，缓存里的正文就是旧的 ——
+# 表现为「管理页把品牌名改了，教程页面还印着旧品牌名」，且重启后自己变对。
+_DOCS_CACHE_KEYS = frozenset({
+    "DOC_PRODUCTS", "DOC_DEFAULT_MODEL", "BRAND_NAME", "BRAND_CONTACT",
+    "API_BASE_URL", "POINTS_UNIT_NAME", "POINTS_PER_CNY",
+})
+
+
+def _invalidate_dependents(keys: set) -> None:
+    """按受影响范围清理下游缓存。
+
+    延迟导入避免与 pricing / docs_catalog 形成循环依赖（它们都 import config，
+    而 config 的动态取值又走本模块）。
+    按「受影响键集合」判断而非无条件全清：保存任意一项配置就把定价缓存打掉，
+    会让管理员每次点保存都触发一次上游定价拉取，白白放大上游压力。
+    """
+    if keys & _PRICING_CACHE_KEYS:
+        try:
+            from . import pricing
+            pricing.invalidate()
+        except ImportError:
+            pass
+    if keys & _DOCS_CACHE_KEYS:
+        try:
+            from . import docs_catalog
+            docs_catalog.invalidate()
+        except ImportError:
+            pass
+
+
 def validate(patch: dict) -> dict:
     """校验并收敛一批待写入的值。任一项非法即整批拒绝（不做部分写入）。
 
@@ -315,6 +364,7 @@ async def update(patch: dict) -> dict:
         data.update(clean)
         _save(data)
         globals()["_cache"] = data
+    _invalidate_dependents(set(clean))
     logger.info("动态配置已更新：%s", ", ".join(sorted(clean)))
     return dict(data)
 
@@ -330,5 +380,6 @@ async def reset(keys: list[str]) -> dict:
             data.pop(k, None)
         _save(data)
         globals()["_cache"] = data
+    _invalidate_dependents(set(keys))
     logger.info("动态配置已重置：%s", ", ".join(sorted(keys)) or "-")
     return dict(data)

@@ -130,3 +130,56 @@ def test_rejected_patch_leaves_no_partial_write(admin_client, client):
     )
     assert r.status_code == 400
     assert client.get("/api/config").json()["data"]["brand"]["name"] == before
+
+
+# ==================== 配置变更与文档档案的联动 ====================
+# 档案文案里的 {{brand}} 等变量在**加载时**插值并缓存。保存配置后若不失效
+# 该缓存，接口会提示「立即生效」而文档页仍是旧文案 —— 提示成功却没有变化，
+# 属于最难排查的一类故障。以下三条锁住这个联动。
+
+def test_unit_rename_reflows_into_doc_body(admin_client):
+    """改积分单位名后，正文里的 {{points_unit}} 必须立刻跟着变。
+
+    这里刻意不用 {{brand}} 断言：points.yml 的标题按注释所述有意不拼品牌名，
+    避免「Workbuddy积分 积分」这类重复。{{points_unit}} 才是正文里的真实插值点。
+    """
+    from app import docs_catalog
+
+    docs_catalog.invalidate()
+    assert admin_client.put(
+        "/api/admin/settings", json={"values": {"POINTS_UNIT_NAME": "灵石"}}
+    ).status_code == 200
+
+    data = admin_client.get("/api/docs/points").json()["data"]
+    assert "灵石" in str(data["sections"])
+    assert "灵石" in data["title"]
+
+
+def test_doc_products_whitelist_takes_effect_at_once(admin_client):
+    """白名单收窄后索引页应立即只剩指定产品，无需重启。"""
+    from app import docs_catalog
+
+    docs_catalog.invalidate()
+    assert admin_client.put(
+        "/api/admin/settings", json={"values": {"DOC_PRODUCTS": ["points"]}}
+    ).status_code == 200
+
+    ids = [p["id"] for p in admin_client.get("/api/docs").json()["data"]["products"]]
+    assert ids == ["points"]
+    # 被白名单排除的产品，详情页也必须拿不到，否则等于留了个后门入口
+    assert admin_client.get("/api/docs/codex").status_code == 404
+
+
+def test_reset_restores_doc_visibility(admin_client):
+    """重置白名单后，此前被隐藏的产品要重新可见。"""
+    from app import docs_catalog
+
+    docs_catalog.invalidate()
+    admin_client.put("/api/admin/settings", json={"values": {"DOC_PRODUCTS": ["points"]}})
+    assert admin_client.post(
+        "/api/admin/settings/reset", json={"keys": ["DOC_PRODUCTS"]}
+    ).status_code == 200
+
+    ids = [p["id"] for p in admin_client.get("/api/docs").json()["data"]["products"]]
+    assert len(ids) > 1
+    assert "codex" in ids

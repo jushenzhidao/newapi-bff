@@ -218,3 +218,54 @@ def test_index_served_with_cache_busting(client):
 def test_protected_endpoints_require_session(client, path):
     """未登录访问受保护接口必须 401，不能因为部署改动被意外放开。"""
     assert client.get(path).status_code == 401
+
+
+def test_shutdown_closes_http_client(monkeypatch):
+    """退出必须归还 httpx 连接池。
+
+    原实现用 `@app.on_event("shutdown")`，而 starlette 1.6.0 已移除
+    `Starlette.on_event`，仅靠 FastAPI 兼容层维持。兼容层一旦移除，
+    收尾逻辑会静默失效 —— 服务照常启动、测试照常通过、连接池慢慢泄漏。
+    这条用例直接锁住「退出时 close 被调用」这个事实，与实现方式无关。
+    """
+    from fastapi.testclient import TestClient
+
+    from app import main
+    from app import newapi_client as na
+
+    called = []
+
+    async def fake_close():
+        called.append(True)
+
+    monkeypatch.setattr(na, "close", fake_close)
+    with TestClient(main.app):
+        assert called == [], "close 不应在服务运行期间被调用"
+    assert called == [True], "退出时必须调用 na.close() 归还连接池"
+
+
+def test_shutdown_closes_client_even_if_startup_fails(monkeypatch):
+    """启动期抛异常也要归还连接池。
+
+    否则崩溃重启循环会不断累积泄漏的连接，把一次启动配置错误放大成
+    上游连接数耗尽。
+    """
+    from fastapi.testclient import TestClient
+
+    from app import main
+    from app import newapi_client as na
+
+    called = []
+
+    async def fake_close():
+        called.append(True)
+
+    def boom():
+        raise RuntimeError("模拟启动期故障")
+
+    monkeypatch.setattr(na, "close", fake_close)
+    monkeypatch.setattr(main.store, "seed_demo_redemptions", boom)
+    with pytest.raises(RuntimeError, match="模拟启动期故障"):
+        with TestClient(main.app):
+            pass
+    assert called == [True], "启动失败时也必须调用 na.close()"

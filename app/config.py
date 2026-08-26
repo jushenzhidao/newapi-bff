@@ -258,6 +258,23 @@ _DEF_DOC_MODELS: tuple = tuple(
     ).split(",") if m.strip()
 )
 
+# 产品档案白名单（逗号分隔的档案 id）。**留空 = 全部启用**，这个默认值是刻意的：
+# 新增一份 docs/products/*.yml 不该因为忘记改配置而静默不可见。
+# 白名单里写了不存在的 id 会在 /readyz 报出来 —— 否则运营配错一个字母，
+# 产品页面直接消失，而没有任何报错线索。
+_DEF_DOC_PRODUCTS: tuple = tuple(
+    p.strip() for p in os.getenv("BFF_DOC_PRODUCTS", "").split(",") if p.strip()
+)
+
+# 定价表缓存秒数。上游 /api/pricing 匿名可读且变动不频繁，默认 10 分钟。
+_DEF_PRICING_TTL: int = _int("BFF_PRICING_TTL", 600)
+
+# 参与展示的模型分组白名单。留空 = 全部分组。
+# 用途：keypool / 内部测试分组不该出现在售前价格表里。
+_DEF_PRICING_GROUPS: tuple = tuple(
+    g.strip() for g in os.getenv("BFF_PRICING_GROUPS", "default").split(",") if g.strip()
+)
+
 
 def brand_logo_text() -> str:
     """Logo 字母：显式配置优先，否则取品牌名首字符。"""

@@ -12,6 +12,7 @@
     scripts/*.py              运维脚本
     tests/*.py
     *.md                      文档
+    docs/products/*.yml       产品档案 —— 正文与图标都会渲染到教程页
 
 用法：
     python scripts/check_no_emoji.py          # 有违规则 exit 1
@@ -54,6 +55,9 @@ def targets() -> list[Path]:
     patterns = [
         "static/*.js", "static/*.html", "static/*.css",
         "app/**/*.py", "scripts/*.py", "tests/*.py", "*.md",
+        # 产品档案：运营会反复编辑的内容来源，最容易漏进 emoji。
+        # 档案的 icon 字段存 static/app.js ICONS 的键名，不是 emoji 字符。
+        "docs/products/*.yml",
     ]
     files: list[Path] = []
     for pat in patterns:

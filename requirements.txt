@@ -1,4 +1,15 @@
-fastapi==0.115.*
+# 0.115.* 声明了 starlette<0.47.0，会把 starlette 锁在有漏洞的版本上；
+# 0.141 起放开为 starlette>=0.46.0（无上界），才能装下修复版。
+# FastAPI 自身无已知漏洞，升级它是为了解开下面 starlette 的版本上限。
+fastapi==0.141.1
+
+# 必须显式声明：fastapi 只要求 starlette>=0.46.0，装 fastapi 不会自动升 starlette，
+# 漏掉这行则 Range DoS（GHSA-7f5h）依旧存在。
+# 1.6.0 覆盖全部 7 条告警，其中真实可利用的是 /static/* 的 Range 头 O(n^2) DoS
+# —— app/main.py 挂了 StaticFiles，该路径对外可达。
+# 详见 SECURITY-DEPS.md。
+starlette==1.6.0
+
 uvicorn[standard]==0.30.*
 httpx==0.27.*
 
@@ -6,12 +17,21 @@ httpx==0.27.*
 # 已移除 itsdangerous：它只签名不加密，载荷是 base64 明文 JSON，而会话里装着
 # 用户的 new-api PAT —— 任何读到 Cookie 字符串的人无需密钥即可直接解出。
 # 钉死小版本：加密是安全边界，不接受 * 通配带来的意外升级。
-cryptography==43.0.3
+#
+# 43.0.3 有 6 条告警。本项目只用 AESGCM+HKDF 对称加密，不做证书链校验，
+# 故 5 条 X.509 相关的不可达；真正需要修的是 wheel 内置 OpenSSL 漏洞
+# （GHSA-537c，httpx 出站 TLS 依赖它）。
+cryptography==50.0.1
 
 # app/config.py 在 import 期加载项目根 .env。
 # 此前它仅作为 uvicorn[standard] 的传递依赖存在，未显式声明 —— 上游一旦调整
 # extras，.env 就会静默不再被读取，全部配置回落默认值（Logfire 曾因此不上报）。
 python-dotenv==1.2.3
+
+# app/docs_catalog.py 在启动期解析 docs/products/*.yml 产品档案。
+# 只用 safe_load，不解析任意 Python 对象。档案是仓库内自有文件、非用户上传，
+# 但仍坚持 safe_load —— 将来若开放运营后台上传档案，full_load 就是远程代码执行。
+PyYAML==6.0.2
 
 # 可观测性（app/observability.py）。未配 LOGFIRE_TOKEN 时不导入 SDK、零副作用，
 # 因此它对本地开发和 CI 不构成前置依赖。

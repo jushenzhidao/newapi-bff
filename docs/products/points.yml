@@ -1,0 +1,68 @@
+# 标题不拼 {{brand}}：品牌名可能本身就含「积分」，拼起来会变成「Workbuddy积分 积分」。
+title: "{{points_unit}}"
+summary: "一份 Key 通用全部模型，按 Token 实际消耗计费，用多少扣多少。"
+icon: "wallet"   # static/app.js ICONS 键名，全站统一 SVG
+badge: "推荐"
+order: 10
+
+sections:
+  - type: callout
+    tone: info
+    text: "1 元 = {{points_per_cny}} {{points_unit}}。全部模型统一用{{points_unit}}结算，不需要为每个模型单独充值。"
+
+  - type: markdown
+    title: "计费怎么算"
+    body: |
+      每个模型有一个**倍率**，倍率决定它每 1K token 消耗多少 {{points_unit}}。
+      倍率 1.0 对应每 1K token 2 {{points_unit}}。
+
+      输出通常比输入贵。表格里的「输出倍率」是**相对输入的乘数**，
+      比如输入倍率 0.174、输出倍率 2，那么输出的实际单价是输入的 2 倍。
+
+      一次请求的消耗 = 输入 token × 输入单价 + 输出 token × 输出单价，
+      按实际用量计算，没有最低消费。
+
+  - type: pricing_table
+    title: "各模型消耗系数"
+    note: "系数实时取自计费系统。带 * 的为按次计费模型，与 Token 用量无关。"
+
+  - type: steps
+    title: "接入步骤"
+    items:
+      - text: "在控制台创建一个 API Key，复制备用。"
+      - text: "把服务地址指向下面这个 Base URL。"
+        code: "{{api_base}}"
+      - text: "用任意 OpenAI 兼容客户端直接调用，无需改代码。"
+        lang: bash
+        code: |
+          curl {{api_base}}/chat/completions \
+            -H "Authorization: Bearer $YOUR_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "model": "{{default_model}}",
+              "messages": [{"role": "user", "content": "你好"}]
+            }'
+
+  - type: platform_tabs
+    title: "配置环境变量"
+    tabs:
+      - name: "macOS / Linux"
+        lang: bash
+        code: |
+          export OPENAI_API_KEY="你的 Key"
+          export OPENAI_BASE_URL="{{api_base}}"
+      - name: "Windows (PowerShell)"
+        lang: powershell
+        code: |
+          $env:OPENAI_API_KEY = "你的 Key"
+          $env:OPENAI_BASE_URL = "{{api_base}}"
+
+  - type: faq
+    title: "常见问题"
+    items:
+      - q: "{{points_unit}}会过期吗？"
+        a: "不会。充值的{{points_unit}}长期有效，没有有效期限制。"
+      - q: "明细里某条显示消耗很小，是不是没扣？"
+        a: "扣了。单条请求的消耗可能小于 1 {{points_unit}}，明细保留小数位显示，累计消耗以实际扣费为准。"
+      - q: "调用失败会扣{{points_unit}}吗？"
+        a: "请求未成功返回内容不扣费。若已产生部分输出后中断，按实际生成的 token 计费。"

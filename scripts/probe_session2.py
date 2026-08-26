@@ -4,7 +4,6 @@
 所以会话打满导致 login 409 时，PAT 依然可用 —— 这正是 BFF 该抓住的救生索。
 """
 import asyncio
-import json
 import os
 import sys
 from pathlib import Path
@@ -23,7 +22,6 @@ BFF = "http://127.0.0.1:8300"
 
 async def main():
     # 通过还活着的 BFF 进程借用其管理员 PAT 缓存
-    from app import newapi_client as na
     async with httpx.AsyncClient(base_url=BASE, timeout=20.0, trust_env=False) as c:
         # 尝试直接读 BFF 内存里的缓存是跨进程的，做不到；
         # 改为探测：用 PAT 头访问 sessions 需要真实 PAT。

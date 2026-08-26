@@ -27,12 +27,14 @@ mock 模式（BFF_MOCK_MODE=1）：内存数据演示。
   POST /api/user/pay/confirm  模拟到账（仅 mock 模式）
   POST /api/user/topup        兑换码充值（真实透传）
 """
+import contextlib
 import hashlib
 import logging
 import os
 import re
 import secrets
 import time
+from collections.abc import Iterable
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -40,7 +42,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, observability, promo, redeem_code, store
+from . import config, docs_catalog, observability, pricing, promo, redeem_code, store
 from . import newapi_client as na
 from . import settings as dyn_settings
 from .newapi_client import NewApiError
@@ -49,7 +51,37 @@ from .security import clear_session, is_admin, require_admin, require_session, s
 logger = logging.getLogger("bff")
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="newapi-bff", docs_url=None, redoc_url=None)
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """启动/收尾。
+
+    用 lifespan 而非 `@app.on_event("shutdown")`：starlette 1.6.0 已移除
+    `Starlette.on_event`，当前能跑仅依赖 FastAPI 的兼容层，该层移除后
+    `na.close()` 不再被调用会导致 httpx 连接池泄漏。且测试套件不覆盖
+    shutdown 路径，这类问题拦不住，故提前迁移。
+    """
+    # try 必须包住启动逻辑本身，不只是 yield：若预置演示卡等启动步骤抛异常，
+    # finally 才会执行、连接池才会归还。否则崩溃重启循环会持续累积泄漏的连接。
+    try:
+        logger.info(
+            "BFF 启动，模式: %s | 1元=%s%s",
+            "MOCK" if MOCK else f"REAL -> {config.NEWAPI_BASE_URL}",
+            config.POINTS_PER_CNY,
+            config.POINTS_UNIT_NAME,
+        )
+        if MOCK:
+            # mock 模式预置演示卡。兑换码语义与真实环境一致：只有预先发放的卡才有效，
+            # 不能随便编一串就登录。
+            cards = store.seed_demo_redemptions()
+            logger.info("已预置 %d 张演示兑换码: %s", len(cards),
+                        ", ".join(c["key"] for c in cards))
+        yield
+    finally:
+        await na.close()
+
+
+app = FastAPI(title="newapi-bff", docs_url=None, redoc_url=None, lifespan=_lifespan)
 
 # 可观测性接线：未配 LOGFIRE_TOKEN 时为空操作，且初始化失败不影响服务启动。
 observability.setup(app)
@@ -62,20 +94,6 @@ PX = config.quota_to_points_exact  # quota → 积分（带小数，用于单条
 # new-api 对 User.Password 有 max 校验（实测 20 位通过、24 位失败）。
 # 在 BFF 层先拦，避免用户填了 24 位密码后拿到一句英文 validation 报错。
 MAX_PASSWORD_LEN = 20
-logger.info("BFF 启动，模式: %s | 1元=%s%s", "MOCK" if MOCK else f"REAL -> {config.NEWAPI_BASE_URL}",
-            config.POINTS_PER_CNY, config.POINTS_UNIT_NAME)
-
-if MOCK:
-    # mock 模式预置演示卡。兑换码语义与真实环境一致：只有预先发放的卡才有效，
-    # 不能随便编一串就登录。
-    _demo_cards = store.seed_demo_redemptions()
-    logger.info("已预置 %d 张演示兑换码: %s", len(_demo_cards),
-                ", ".join(c["key"] for c in _demo_cards))
-
-
-@app.on_event("shutdown")
-async def _shutdown():
-    await na.close()
 
 
 # ---------- 异常处理：业务错误透传 message，内部错误不泄露 ----------
@@ -742,6 +760,26 @@ async def admin_settings_get(_s: dict = Depends(require_admin)):
     return ok(_settings_view())
 
 
+# 改这些键会影响档案的插值结果或可见范围，保存后必须丢弃档案缓存，
+# 否则页面提示「立即生效」而文档页仍是旧文案 —— 这种「提示成功但没变化」
+# 最难排查。宁可多失效一次（重新读六份 YAML 的成本可忽略）。
+_DOCS_AFFECTING_KEYS = frozenset({
+    "BRAND_NAME", "BRAND_CONTACT", "API_BASE_URL", "POINTS_UNIT_NAME",
+    "POINTS_PER_CNY", "DOC_DEFAULT_MODEL", "DOC_PRODUCTS",
+})
+_PRICING_AFFECTING_KEYS = frozenset({
+    "PRICING_TTL", "PRICING_GROUPS", "DOC_MODELS", "POINTS_PER_CNY",
+})
+
+
+def _invalidate_caches(keys: Iterable[str]) -> None:
+    touched = set(keys)
+    if touched & _DOCS_AFFECTING_KEYS:
+        docs_catalog.invalidate()
+    if touched & _PRICING_AFFECTING_KEYS:
+        pricing.invalidate()
+
+
 @app.put("/api/admin/settings")
 async def admin_settings_put(body: SettingsPatchBody,
                              _s: dict = Depends(require_admin)):
@@ -749,6 +787,7 @@ async def admin_settings_put(body: SettingsPatchBody,
         await dyn_settings.update(body.values)
     except dyn_settings.ValidationError as e:
         return fail(str(e), 400)
+    _invalidate_caches(body.values.keys())
     return ok(_settings_view(), "已保存，立即生效")
 
 
@@ -759,7 +798,40 @@ async def admin_settings_reset(body: SettingsResetBody,
         await dyn_settings.reset(body.keys)
     except dyn_settings.ValidationError as e:
         return fail(str(e), 400)
+    _invalidate_caches(body.keys)
     return ok(_settings_view(), "已重置为环境变量默认值")
+
+
+# ==================== 产品文档 ====================
+# 教程内容不再硬编码在前端，而是由 docs/products/*.yml 驱动，
+# 新增在售产品只需加一个档案文件，前后端都不用改。
+
+@app.get("/api/docs")
+async def docs_index():
+    """产品索引。不含正文，避免首屏把六份档案全拉下来。"""
+    return ok({"products": docs_catalog.index()})
+
+
+@app.get("/api/docs/{product_id}")
+async def docs_detail(product_id: str):
+    """单产品正文。含 pricing_table 段时注入实时系数表。
+
+    定价拉取失败不影响本接口返回 —— 文档是售前页面，打不开等于卖不出去，
+    一张标注了日期的旧价格表远好过一个白屏。stale 标记交给前端显式提示。
+    """
+    product = docs_catalog.get(product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="产品不存在或未上架")
+
+    if any(s["type"] == "pricing_table" for s in product["sections"]):
+        pricing_data = await pricing.table()
+        # 不改档案缓存里的原对象，否则第二次请求会读到被注入过的副本
+        product = dict(product)
+        product["sections"] = [
+            {**s, "data": pricing_data} if s["type"] == "pricing_table" else s
+            for s in product["sections"]
+        ]
+    return ok(product)
 
 
 # ==================== 健康检查 ====================
@@ -804,6 +876,9 @@ async def readyz():
         # 真实模式必须有管理员凭证，否则注册、首充赠送、兑换码登录全都不可用。
         # config.py 已移除默认账密（会随公开仓库/镜像分发），所以这里要显式兜住。
         "admin_cred_configured": (True, "") if MOCK else _check_admin_cred(),
+        # 档案文件没进镜像时，产品页会静默变成空列表而不是报错 ——
+        # 没有任何告警，只是「文档入口点进去什么都没有」，很容易上线后才被用户发现。
+        "doc_products_loadable": _check_doc_products(),
     }.items():
         checks[name] = passed
         if not passed:
@@ -817,6 +892,63 @@ async def readyz():
                             content={"status": "unready", "checks": checks,
                                      "failed": list(reasons), "reasons": reasons})
     return {"status": "ready", "checks": checks, "version": APP_VERSION}
+
+
+def _check_doc_products() -> tuple[bool, str]:
+    """档案能加载、且白名单里的 id 都真实存在。
+
+    白名单拼错一个字母的后果是该产品从页面上消失，而不是报错 —— 运营不会知道，
+    所以必须在就绪阶段就拦住。
+    """
+    try:
+        loaded = docs_catalog.all_products()
+    except Exception as e:  # 档案语法错误 / 目录缺失
+        return False, f"产品档案加载失败：{e}（检查 docs/products 是否进了镜像）"
+    if not loaded:
+        return False, f"{docs_catalog.DOCS_DIR} 下没有任何有效档案"
+    unknown = [p for p in config.DOC_PRODUCTS if p not in loaded]
+    if unknown:
+        return False, (f"DOC_PRODUCTS 含不存在的产品 id {unknown}，"
+                       f"这些产品不会显示；可选值：{sorted(loaded)}")
+
+    # 图标键名写错只会静默回落成 book，页面看着「正常」但图标是错的。
+    # 键集从 static/app.js 现场解析，避免这里硬编码一份副本跟前端漂移。
+    known_icons = _icon_keys()
+    if known_icons:
+        bad = sorted({
+            f"{pid}:{p['icon']}" for pid, p in loaded.items()
+            if p.get("icon") and p["icon"] not in known_icons
+        })
+        if bad:
+            return False, (f"档案图标键名不存在于 static/app.js ICONS：{bad}；"
+                           f"可选值：{sorted(known_icons)}")
+    return True, ""
+
+
+def _icon_keys() -> set[str]:
+    """解析 static/app.js 的 ICONS 注册表键名。
+
+    解析失败返回空集，让调用方跳过这项检查 —— 图标键名校验是锦上添花，
+    不该因为正则没匹配上就把整个服务判成 unready。
+    """
+    try:
+        src = (STATIC_DIR / "app.js").read_text("utf-8")
+    except OSError:
+        return set()
+    m = re.search(r"const\s+ICONS\s*=\s*\{", src)
+    if not m:
+        return set()
+    # 从 `{` 起做括号配平，取到注册表字面量结束为止，避免误吞后面的代码
+    depth, start = 0, m.end() - 1
+    for i in range(start, len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                body = src[start:i]
+                return set(re.findall(r"[\{,]\s*([a-zA-Z_][\w]*)\s*:", body))
+    return set()
 
 
 def _check_static_assets() -> tuple[bool, str]:

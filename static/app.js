@@ -43,7 +43,10 @@ async function api(path, options = {}) {
   if (res.status === 401) {
     currentUser = null;
     const h = location.hash;
-    if (!h.startsWith("#/login") && !h.startsWith("#/register") && !h.startsWith("#/home")) {
+    // /docs 是公开页，访客停留在教程页时不应被 401 弹去登录，
+    // 否则会出现「读教程读到一半被踢走」。与 PUBLIC_PAGES 保持一致。
+    const open = ["#/login", "#/register", "#/home", "#/docs"];
+    if (!open.some((p) => h.startsWith(p))) {
       location.hash = "#/login";
     }
     throw new Error((data && (data.message || data.detail)) || "未登录");
@@ -208,7 +211,9 @@ const routes = {
   "/docs": renderDocs,
   "/admin": renderAdmin,
 };
-const PUBLIC_PAGES = ["/home", "/login", "/register"];
+/* 教程是售前页面：未登录用户必须能读到消耗说明和安装步骤，
+ * 否则等于把潜在客户拦在注册墙外。 */
+const PUBLIC_PAGES = ["/home", "/login", "/register", "/docs"];
 
 /* 取 hash 路由上的 query 参数，如 #/topup?trade_no=USR1NOxxx */
 function hashQuery() {
@@ -219,13 +224,19 @@ function hashQuery() {
 async function router() {
   const hash = location.hash.replace(/^#/, "") || "/home";
   const path = hash.split("?")[0];
-  const view = routes[path] || renderLanding;
+  // 带参数的路径：routes 是精确匹配表，#/docs/points 这类需要单独识别，
+  // 否则会静默落到 renderLanding 兜底，表现为「点进教程回到首页」。
+  const docId = path.startsWith("/docs/") ? path.slice("/docs/".length) : "";
+  const base = docId ? "/docs" : path;
+  const view = docId
+    ? () => renderDocProduct(decodeURIComponent(docId))
+    : (routes[path] || renderLanding);
   if (!PROMO._loaded) {
     await Promise.all([loadPromo(), loadSite()]);   // 并行，省一个 RTT
     PROMO._loaded = true;
     applyBrand();
   }
-  if (!PUBLIC_PAGES.includes(path)) {
+  if (!PUBLIC_PAGES.includes(base)) {
     try { await refreshUser(); } catch (_) { return; }
   }
   await view();
@@ -567,9 +578,13 @@ function renderLayout(active, contentHtml) {
     ["资产", [["topup", "/topup", "充值中心"], ["key", "/keys", "API Key"], ["log", "/logs", "调用日志"]]],
     ["帮助", [["book", "/docs", "使用教程"]]],
   ];
+  // /docs 是公开页，未登录也会走到这里，此时 currentUser 仍是 null。
+  // 用局部空对象兜住，避免访客访问教程页时属性读取抛异常导致整页白屏。
+  const u = currentUser || {};
+  const guest = !currentUser;
   // 管理入口按后端下发的 is_admin 显示。隐藏只是体感，真正的拦截在
   // /api/admin/* 的 require_admin —— 前端标志被改也拿不到数据。
-  if (currentUser.is_admin) nav.push(["管理", [["settings", "/admin", "站点配置"]]]);
+  if (u.is_admin) nav.push(["管理", [["settings", "/admin", "站点配置"]]]);
   app.innerHTML = `
   <div class="layout">
     <aside class="sidebar">
@@ -582,17 +597,27 @@ function renderLayout(active, contentHtml) {
         `).join("")}
       </nav>
       <div class="sidebar-foot">
+        ${guest ? `
         <div class="user-line">
-          <span class="uname">${esc(currentUser.display_name || currentUser.username)}</span>
+          <span class="uname muted">未登录</span>
+          <a class="logout-btn" href="#/login">登录</a>
+        </div>
+        <div class="muted">登录后可创建 Key 与查看用量</div>
+        ` : `
+        <div class="user-line">
+          <span class="uname">${esc(u.display_name || u.username)}</span>
           <button class="logout-btn" id="btn-logout">退出</button>
         </div>
-        <div class="muted">${currentUser.is_redeem_account ? "兑换码账号"
-          : (currentUser.email && currentUser.email !== "-" ? esc(currentUser.email) : "已绑定账号")}</div>
+        <div class="muted">${u.is_redeem_account ? "兑换码账号"
+          : (u.email && u.email !== "-" ? esc(u.email) : "已绑定账号")}</div>
+        `}
       </div>
     </aside>
     <main class="main">${contentHtml}</main>
   </div>`;
-  document.getElementById("btn-logout").onclick = async () => {
+  // 访客态渲染的是登录链接而非按钮，这里必须判空。
+  const logoutBtn = document.getElementById("btn-logout");
+  if (logoutBtn) logoutBtn.onclick = async () => {
     await api("/api/user/logout");
     currentUser = null;
     location.hash = "#/home";
@@ -1397,159 +1422,6 @@ async function renderLogs() {
 }
 
 /* ================= 使用教程 ================= */
-async function renderDocs() {
-  const codeCurl = `curl ${APIBASE()}/chat/completions \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer sk-你的Key" \\
-  -d '{
-    "model": "${MODEL()}",
-    "messages": [{"role": "user", "content": "你好"}]
-  }'`;
-  const codePy = `from openai import OpenAI
-
-client = OpenAI(
-    api_key="sk-你的Key",
-    base_url="${APIBASE()}",  # 只改这一行
-)
-
-resp = client.chat.completions.create(
-    model="${MODEL()}",
-    messages=[{"role": "user", "content": "你好"}],
-)
-print(resp.choices[0].message.content)`;
-  const codeJs = `import OpenAI from "openai";
-
-const client = new OpenAI({
-  apiKey: "sk-你的Key",
-  baseURL: "${APIBASE()}",  // 只改这一行
-});
-
-const resp = await client.chat.completions.create({
-  model: "${MODEL()}",
-  messages: [{ role: "user", content: "你好" }],
-});
-console.log(resp.choices[0].message.content);`;
-
-  renderLayout("/docs", `
-    <div class="page-title">使用教程</div>
-    <div class="page-sub">一分钟完成接入，兼容 OpenAI SDK 与各类客户端</div>
-
-    <div class="doc-toc">
-      <a href="#doc-quick">快速开始</a>
-      <a href="#doc-code">代码示例</a>
-      <a href="#doc-topup">充值说明</a>
-      <a href="#doc-faq">常见问题</a>
-    </div>
-
-    <div class="card" id="doc-quick">
-      <div class="card-title">快速开始</div>
-      <div class="doc-step">
-        <div class="step-no">1</div>
-        <div class="step-body">
-          <b>创建 API Key</b>
-          <p>前往 <a href="#/keys" style="color:var(--primary)">API Key 管理</a> 页面点击「创建 Key」，创建成功后立即复制保存。</p>
-        </div>
-      </div>
-      <div class="doc-step">
-        <div class="step-no">2</div>
-        <div class="step-body">
-          <b>充值余额</b>
-          <p>前往 <a href="#/topup" style="color:var(--primary)">充值中心</a>，支持微信 / 支付宝在线支付与兑换码，实时到账。</p>
-        </div>
-      </div>
-      <div class="doc-step">
-        <div class="step-no">3</div>
-        <div class="step-body">
-          <b>发起调用</b>
-          <p>接口地址 <span class="mono">${APIBASE()}</span>，请求头带上 <span class="mono">Authorization: Bearer sk-你的Key</span> 即可。</p>
-        </div>
-      </div>
-      <div class="doc-step">
-        <div class="step-no">4</div>
-        <div class="step-body">
-          <b>查看用量</b>
-          <p>在 <a href="#/analytics" style="color:var(--primary)">用量看板</a> 和 <a href="#/logs" style="color:var(--primary)">调用日志</a> 中实时查看消耗明细。</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="card" id="doc-code">
-      <div class="card-title">代码示例</div>
-      <b style="font-size:13.5px">cURL</b>
-      <div class="code-block"><span class="cb-lang">bash</span><button class="cb-copy" data-code="curl">复制</button><pre style="padding-top:30px">${esc(codeCurl)}</pre></div>
-      <b style="font-size:13.5px;display:block;margin-top:16px">Python（OpenAI SDK）</b>
-      <div class="code-block"><span class="cb-lang">python</span><button class="cb-copy" data-code="py">复制</button><pre style="padding-top:30px">${esc(codePy)}</pre></div>
-      <b style="font-size:13.5px;display:block;margin-top:16px">Node.js</b>
-      <div class="code-block"><span class="cb-lang">javascript</span><button class="cb-copy" data-code="js">复制</button><pre style="padding-top:30px">${esc(codeJs)}</pre></div>
-    </div>
-
-    <div class="card" id="doc-topup">
-      <div class="card-title">充值说明</div>
-      <div class="doc-step">
-        <div class="step-no">分</div>
-        <div class="step-body">
-          <b>${PROMO.unit}计费</b>
-          <p>平台统一以「${PROMO.unit}」计价：<b>¥1 = ${fmtPoints(PROMO.points_per_cny)} ${PROMO.unit}</b>。调用时按各模型官方定价对应的 Token 用量实时扣减${PROMO.unit}，${PROMO.unit}永不过期。仪表盘、看板与调用日志中的数值均为${PROMO.unit}。</p>
-        </div>
-      </div>
-      ${PROMO.first_topup.enabled ? `
-      <div class="doc-step">
-        <div class="step-no">送</div>
-        <div class="step-body">
-          <b>${esc(PROMO.first_topup.title)}</b>
-          <p>每个账号首次充值满 ¥${PROMO.first_topup.min_cny}，可额外获赠 ${Math.round(PROMO.first_topup.rate * 100)}% 的${PROMO.unit}（单次最高 ${fmtPoints(PROMO.first_topup.max_points)} ${PROMO.unit}），赠送${PROMO.unit}随充值一并到账，仅限一次。</p>
-        </div>
-      </div>` : ""}
-      <div class="doc-step">
-        <div class="step-no">微</div>
-        <div class="step-body">
-          <b>在线支付</b>
-          <p>选择档位与支付方式后跳转收银台，支付完成${PROMO.unit}自动到账，本站会实时检测并提示。</p>
-        </div>
-      </div>
-      <div class="doc-step">
-        <div class="step-no">码</div>
-        <div class="step-body">
-          <b>兑换码</b>
-          <p>输入兑换码点击「立即兑换」即时到账；每个兑换码只能使用一次。</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="card" id="doc-faq">
-      <div class="card-title">常见问题</div>
-      <div class="faq-item">
-        <b>调用返回 401 Unauthorized？</b>
-        <p>检查 Key 是否复制完整（以 sk- 开头）、是否已被删除。请求头格式必须是 <span class="mono">Authorization: Bearer sk-xxx</span>。</p>
-      </div>
-      <div class="faq-item">
-        <b>调用返回额度不足？</b>
-        <p>${PROMO.unit}已用完，前往充值中心充值后即可恢复调用；也可以在用量看板查看消耗去向。</p>
-      </div>
-      <div class="faq-item">
-        <b>${PROMO.unit}怎么换算？</b>
-        <p>¥1 = ${fmtPoints(PROMO.points_per_cny)} ${PROMO.unit}。平台所有余额、消耗、日志均以${PROMO.unit}展示，充值时页面会直接告诉你本次到账多少${PROMO.unit}。</p>
-      </div>
-      <div class="faq-item">
-        <b>支持哪些模型？</b>
-        <p>GPT 系列、Claude 系列、DeepSeek、Qwen 等 30+ 主流模型，模型名与官方一致，直接在 <span class="mono">model</span> 字段指定。</p>
-      </div>
-      <div class="faq-item">
-        <b>Key 泄露了怎么办？</b>
-        <p>立即在 API Key 管理页删除该 Key（实时失效），再创建一个新的替换。</p>
-      </div>
-      <div class="faq-item">
-        <b>如何在 LangChain / 各类客户端中使用？</b>
-        <p>凡是支持自定义 OpenAI base_url 的工具，把地址改为 <span class="mono">${APIBASE()}</span>、填入你的 Key 即可。</p>
-      </div>
-    </div>`);
-
-  const codes = { curl: codeCurl, py: codePy, js: codeJs };
-  document.querySelectorAll(".cb-copy").forEach(btn => {
-    btn.onclick = () => copyText(codes[btn.dataset.code]);
-  });
-}
-
 /* ================= 站点配置（管理员） ================= */
 let ADMIN = { items: [], groups: [], dirty: {} };
 

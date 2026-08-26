@@ -1,0 +1,54 @@
+# 占位档案：结构完整可渲染，正文待补真实内容。
+# draft: true 时该产品不出现在前台，可安全提交。内容填好后删掉 draft 行即可上线。
+# 待补：套餐档位、Token 总量、有效期、超额处理方式
+title: "Token Plan"
+summary: "按 Token 总量预付的套餐。"
+icon: "key"   # static/app.js ICONS 键名，全站统一 SVG
+badge: "待补充"
+order: 40
+draft: false
+sections:
+  - type: callout
+    tone: warn
+    text: "本页内容待补充，以下为结构占位，请勿据此操作。"
+
+  - type: markdown
+    title: "这是什么"
+    body: |
+      TODO：补充产品定位与适用场景。
+
+  - type: table
+    title: "额度与消耗规则"
+    note: "TODO：以下为占位表头，请填入真实规则。"
+    columns: ["项目", "规则", "说明"]
+    rows:
+      - ["TODO", "TODO", "TODO"]
+
+  - type: markdown
+    title: "消耗说明"
+    body: |
+      TODO：补充消耗口径，以及与{{points_unit}}的换算关系。
+
+  - type: platform_tabs
+    title: "安装"
+    tabs:
+      - name: "macOS / Linux"
+        lang: bash
+        code: |
+          # TODO：替换为真实安装命令
+      - name: "Windows (PowerShell)"
+        lang: powershell
+        code: |
+          # TODO：替换为真实安装命令
+
+  - type: steps
+    title: "配置"
+    items:
+      - text: "TODO：补充配置步骤。"
+        code: "{{api_base}}"
+
+  - type: faq
+    title: "常见问题"
+    items:
+      - q: "TODO"
+        a: "TODO"
