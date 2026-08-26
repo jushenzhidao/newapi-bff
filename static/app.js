@@ -192,6 +192,7 @@ const ICONS = {
   link: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
   gift: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8"/><path d="M16.5 8a2.5 2.5 0 0 0 0-5C13 3 12 8 12 8"/></svg>',
   card: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/></svg>',
+  settings: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
 };
 
 /* ================= 路由 ================= */
@@ -205,6 +206,7 @@ const routes = {
   "/keys": renderKeys,
   "/logs": renderLogs,
   "/docs": renderDocs,
+  "/admin": renderAdmin,
 };
 const PUBLIC_PAGES = ["/home", "/login", "/register"];
 
@@ -565,6 +567,9 @@ function renderLayout(active, contentHtml) {
     ["资产", [["topup", "/topup", "充值中心"], ["key", "/keys", "API Key"], ["log", "/logs", "调用日志"]]],
     ["帮助", [["book", "/docs", "使用教程"]]],
   ];
+  // 管理入口按后端下发的 is_admin 显示。隐藏只是体感，真正的拦截在
+  // /api/admin/* 的 require_admin —— 前端标志被改也拿不到数据。
+  if (currentUser.is_admin) nav.push(["管理", [["settings", "/admin", "站点配置"]]]);
   app.innerHTML = `
   <div class="layout">
     <aside class="sidebar">
@@ -1543,6 +1548,134 @@ console.log(resp.choices[0].message.content);`;
   document.querySelectorAll(".cb-copy").forEach(btn => {
     btn.onclick = () => copyText(codes[btn.dataset.code]);
   });
+}
+
+/* ================= 站点配置（管理员） ================= */
+let ADMIN = { items: [], groups: [], dirty: {} };
+
+function adminField(it) {
+  const id = `cfg-${it.key}`;
+  const val = it.value;
+  if (it.type === "bool") {
+    return `<label class="cfg-switch">
+      <input type="checkbox" id="${id}" data-key="${it.key}" ${val ? "checked" : ""}>
+      <span>${val ? "已开启" : "已关闭"}</span></label>`;
+  }
+  const shown = Array.isArray(val) ? val.join(", ") : String(val);
+  const type = (it.type === "int" || it.type === "float") ? "number" : "text";
+  const step = it.type === "float" ? ' step="0.01"' : "";
+  return `<input class="cfg-input" type="${type}"${step} id="${id}"
+    data-key="${it.key}" value="${esc(shown)}">`;
+}
+
+async function renderAdmin() {
+  renderLayout("/admin", `
+    <div class="page-title">站点配置</div>
+    <div class="page-sub">改动即时生效，无需重启服务</div>
+    <div class="card"><div class="skeleton sk-block"></div></div>`);
+  let r;
+  try {
+    r = await api("/api/admin/settings");
+  } catch (e) {
+    document.querySelector(".main .card").innerHTML =
+      `<div class="empty">${esc(e.message || "无权访问")}</div>`;
+    return;
+  }
+  ADMIN = { ...r.data, dirty: {} };
+
+  const byGroup = g => ADMIN.items.filter(i => i.group === g);
+  document.querySelector(".main").innerHTML = `
+    <div class="page-title">站点配置</div>
+    <div class="page-sub">改动即时生效，无需重启服务。点「恢复默认」即回落到环境变量</div>
+    ${ADMIN.groups.map(g => `
+      <div class="card" style="margin-bottom:18px">
+        <div class="card-title">${esc(g.label)}</div>
+        <div class="cfg-list">
+          ${byGroup(g.key).map(it => `
+            <div class="cfg-row">
+              <div class="cfg-meta">
+                <div class="cfg-label">${esc(it.label)}
+                  ${it.overridden ? '<span class="cfg-tag">已自定义</span>' : ""}</div>
+                ${it.hint ? `<div class="cfg-hint">${esc(it.hint)}</div>` : ""}
+              </div>
+              <div class="cfg-ctl">${adminField(it)}
+                <button class="cfg-reset" data-reset="${it.key}"
+                  ${it.overridden ? "" : "disabled"}>恢复默认</button></div>
+            </div>`).join("")}
+        </div>
+      </div>`).join("")}
+    <div class="cfg-bar">
+      <span class="muted" id="cfg-count">未修改</span>
+      <button class="btn primary" id="cfg-save" disabled>保存修改</button>
+    </div>`;
+
+  const spec = k => ADMIN.items.find(i => i.key === k);
+  const countEl = document.getElementById("cfg-count");
+  const saveBtn = document.getElementById("cfg-save");
+  const sync = () => {
+    const n = Object.keys(ADMIN.dirty).length;
+    countEl.textContent = n ? `${n} 项待保存` : "未修改";
+    saveBtn.disabled = n === 0;
+  };
+
+  document.querySelectorAll("[data-key]").forEach(el => {
+    const key = el.dataset.key;
+    const it = spec(key);
+    const orig = Array.isArray(it.value) ? it.value.join(", ") : String(it.value);
+    const handler = () => {
+      if (it.type === "bool") {
+        el.nextElementSibling.textContent = el.checked ? "已开启" : "已关闭";
+        if (el.checked === it.value) delete ADMIN.dirty[key];
+        else ADMIN.dirty[key] = el.checked;
+      } else if (el.value.trim() === orig.trim()) {
+        delete ADMIN.dirty[key];
+      } else {
+        ADMIN.dirty[key] = el.value.trim();
+      }
+      sync();
+    };
+    el.addEventListener(it.type === "bool" ? "change" : "input", handler);
+  });
+
+  saveBtn.onclick = async () => {
+    // POINTS_PER_CNY 改动会立刻改变所有用户看到的余额数字，单独二次确认
+    if ("POINTS_PER_CNY" in ADMIN.dirty &&
+        !confirm(`积分汇率将从 ${spec("POINTS_PER_CNY").value} 改为 ${ADMIN.dirty.POINTS_PER_CNY}。\n` +
+                 "所有用户的余额显示会立即变化，确认继续？")) return;
+    saveBtn.disabled = true;
+    try {
+      const res = await api("/api/admin/settings",
+        { method: "PUT", body: { values: ADMIN.dirty } });
+      toast(res.message || "已保存", "success");
+      await reloadSiteConfig();
+      renderAdmin();
+    } catch (e) {
+      toast(e.message || "保存失败", "error");
+      saveBtn.disabled = false;
+    }
+  };
+
+  document.querySelectorAll("[data-reset]").forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        await api("/api/admin/settings/reset",
+          { method: "POST", body: { keys: [btn.dataset.reset] } });
+        toast("已恢复默认", "success");
+        await reloadSiteConfig();
+        renderAdmin();
+      } catch (e) {
+        toast(e.message || "重置失败", "error");
+        btn.disabled = false;
+      }
+    };
+  });
+}
+
+/* 配置改完后刷新前端缓存的站点信息，否则品牌名/单位名要等下次刷新才变 */
+async function reloadSiteConfig() {
+  await Promise.all([loadPromo(), loadSite()]);
+  applyBrand();
 }
 
 /* ================= 启动 ================= */

@@ -1,8 +1,13 @@
 """加密 Cookie 会话（无状态 BFF）。
 
-会话载荷：{"uid": int, "username": str, "pat": str}
+会话载荷：{"uid": int, "username": str, "pat": str, "role": int}
 pat = new-api 的 Personal Access Token（长期有效），
 这是修订版方案二的核心：不代持 15 分钟 access_token，改持 PAT。
+
+role 来自上游 /api/user/login 的 data.user.role（1 普通 / 10 管理员 / 100 root），
+仅用于 BFF 自身的管理页鉴权。**它不放大权限**：调用上游依旧只用该用户的 PAT，
+role 被伪造也拿不到上游管理员能力。之所以仍要放进加密载荷而非明文，
+是避免普通用户改 Cookie 就能打开管理页（哪怕只是读到运营策略）。
 
 ## 为什么是加密而不只是签名
 
@@ -157,4 +162,36 @@ def require_session(request: Request) -> dict:
     session = read_session(request)
     if session is None:
         raise HTTPException(status_code=401, detail="未登录或会话已过期")
+    return session
+
+
+# new-api 的角色常量（common/constants.go）：普通 1 / 管理员 10 / root 100。
+ROLE_ADMIN = 10
+
+
+def is_admin(session: dict) -> bool:
+    """判定会话是否具备管理员身份：上游 role >= 10，或在静态名单内。
+
+    role 缺失按**非管理员**处理：本次改动之前签发的会话载荷里没有 role 字段，
+    默认放行会让所有存量会话瞬间获得管理权限，这是不可接受的失效方向。
+    这些用户重新登录一次即可拿到带 role 的新会话。
+
+    名单是兜底通道（mock 模式、上游不返回 role 的实例），见 config.ADMIN_USERNAMES。
+    """
+    role = session.get("role")
+    if isinstance(role, int) and not isinstance(role, bool) and role >= ROLE_ADMIN:
+        return True
+    username = session.get("username")
+    return bool(username) and username in config.ADMIN_USERNAMES
+
+
+def require_admin(request: Request) -> dict:
+    """管理员依赖。读写管理接口都必须挂它 —— 配置项含运营策略，不该对普通用户可见。
+
+    未登录返回 401（前端据此跳登录），已登录但非管理员返回 403
+    （语义准确：重新登录也没用，不该引导用户去登录页打转）。
+    """
+    session = require_session(request)
+    if not is_admin(session):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
     return session

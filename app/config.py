@@ -104,6 +104,16 @@ ADMIN_CRED_FILE: str = os.getenv(
 SECRET_KEY_DEFAULT = "dev-only-secret-change-me"  # noqa: S105
 SECRET_KEY: str = os.getenv("BFF_SECRET_KEY", SECRET_KEY_DEFAULT)
 
+# BFF 管理页的额外管理员名单（逗号分隔用户名）。
+# 常规判定走上游返回的 user.role >= 10；本项是补充通道，覆盖两种情形：
+#   1. mock 模式没有真实上游，否则本地永远进不去管理页；
+#   2. 上游实例若不返回 role 字段，仅靠 role 判定会导致谁都进不去。
+# **刻意不做成可在线修改**：否则管理员能自行扩权、且一旦写错就再没人能进管理页
+# （改回来需要的正是管理权限，形成死锁）。只能通过环境变量注入。
+ADMIN_USERNAMES: frozenset = frozenset(
+    u.strip() for u in os.getenv("BFF_ADMIN_USERNAMES", "").split(",") if u.strip()
+)
+
 COOKIE_NAME = "bff_session"
 COOKIE_MAX_AGE = 7 * 24 * 3600  # 7 天；PAT 长期有效，不受 new-api 15min access_token 限制
 
@@ -140,18 +150,16 @@ COOKIE_SAMESITE: str = _choice("BFF_COOKIE_SAMESITE", "lax", ("lax", "strict", "
 # 对外我们只讲「积分」：1 元 = POINTS_PER_CNY 积分。
 # 换算链：quota → points = quota / QUOTA_PER_CNY * POINTS_PER_CNY
 QUOTA_PER_CNY: int = _int("BFF_QUOTA_PER_CNY", 500000)      # new-api 内部口径
-POINTS_PER_CNY: int = _int("BFF_POINTS_PER_CNY", 10000)     # 1 元 = 10000 积分（可配）
-POINTS_UNIT_NAME: str = os.getenv("BFF_POINTS_UNIT_NAME", "积分")
-
-# 1 积分 = 多少 quota（用于积分→quota 反算，如赠送积分调 add_quota）
-QUOTA_PER_POINT: float = QUOTA_PER_CNY / POINTS_PER_CNY if POINTS_PER_CNY else 0.0
+# 以下两项可被管理员在线修改，故只作为「默认值」保留，实际取值走本模块 __getattr__。
+_DEF_POINTS_PER_CNY: int = _int("BFF_POINTS_PER_CNY", 10000)   # 1 元 = 10000 积分
+_DEF_POINTS_UNIT_NAME: str = os.getenv("BFF_POINTS_UNIT_NAME", "积分")
 
 
 def quota_to_points(quota) -> int:
     """内部 quota → 对外积分（向下取整，绝不虚报余额）。用于余额、累计等聚合值。"""
     if not QUOTA_PER_CNY:
         return 0
-    return int(float(quota or 0) / QUOTA_PER_CNY * POINTS_PER_CNY)
+    return int(float(quota or 0) / QUOTA_PER_CNY * _dyn("POINTS_PER_CNY"))
 
 
 def quota_to_points_exact(quota) -> float:
@@ -164,29 +172,36 @@ def quota_to_points_exact(quota) -> float:
     """
     if not QUOTA_PER_CNY:
         return 0.0
-    return round(float(quota or 0) / QUOTA_PER_CNY * POINTS_PER_CNY, 4)
+    return round(float(quota or 0) / QUOTA_PER_CNY * _dyn("POINTS_PER_CNY"), 4)
+
+
+def quota_per_point() -> float:
+    """1 积分 = 多少 quota。随 POINTS_PER_CNY 动态变化，故为函数而非常量。"""
+    ppc = _dyn("POINTS_PER_CNY")
+    return QUOTA_PER_CNY / ppc if ppc else 0.0
 
 
 def points_to_quota(points) -> int:
     """对外积分 → 内部 quota（四舍五入，赠送场景宁可多给一点点）。"""
-    return int(round(float(points or 0) * QUOTA_PER_POINT))
+    return int(round(float(points or 0) * quota_per_point()))
 
 
 def cny_to_points(cny) -> int:
-    return int(round(float(cny or 0) * POINTS_PER_CNY))
+    return int(round(float(cny or 0) * _dyn("POINTS_PER_CNY")))
 
 
 # ==================== 运营活动 ====================
+# 本节全部支持管理员在线修改，故均为 _DEF_ 前缀的默认值，取值统一走 __getattr__。
 # 注册礼包：新用户注册即赠送积分（0 表示关闭）
-PROMO_SIGNUP_ENABLED: bool = _bool("BFF_PROMO_SIGNUP_ENABLED", True)
-PROMO_SIGNUP_POINTS: int = _int("BFF_PROMO_SIGNUP_POINTS", 20000)  # 送 2 万积分（=¥2）
+_DEF_PROMO_SIGNUP_ENABLED: bool = _bool("BFF_PROMO_SIGNUP_ENABLED", True)
+_DEF_PROMO_SIGNUP_POINTS: int = _int("BFF_PROMO_SIGNUP_POINTS", 20000)  # 2 万积分（=¥2）
 
 # 首充活动：用户首次充值成功后，按比例额外赠送积分
-PROMO_FIRST_TOPUP_ENABLED: bool = _bool("BFF_PROMO_FIRST_TOPUP_ENABLED", True)
-PROMO_FIRST_TOPUP_RATE: float = float(os.getenv("BFF_PROMO_FIRST_TOPUP_RATE", "1.0"))  # 1.0 = 充多少送多少
-PROMO_FIRST_TOPUP_MIN_CNY: int = _int("BFF_PROMO_FIRST_TOPUP_MIN_CNY", 10)   # 起充门槛（元）
-PROMO_FIRST_TOPUP_MAX_POINTS: int = _int("BFF_PROMO_FIRST_TOPUP_MAX_POINTS", 1000000)  # 赠送上限（100万积分=¥100）
-PROMO_TITLE: str = os.getenv("BFF_PROMO_TITLE", "新用户首充翻倍")
+_DEF_PROMO_FIRST_TOPUP_ENABLED: bool = _bool("BFF_PROMO_FIRST_TOPUP_ENABLED", True)
+_DEF_PROMO_FIRST_TOPUP_RATE: float = float(os.getenv("BFF_PROMO_FIRST_TOPUP_RATE", "1.0"))
+_DEF_PROMO_FIRST_TOPUP_MIN_CNY: int = _int("BFF_PROMO_FIRST_TOPUP_MIN_CNY", 10)   # 门槛（元）
+_DEF_PROMO_FIRST_TOPUP_MAX_POINTS: int = _int("BFF_PROMO_FIRST_TOPUP_MAX_POINTS", 1000000)
+_DEF_PROMO_TITLE: str = os.getenv("BFF_PROMO_TITLE", "新用户首充翻倍")
 
 # 首充记录持久化文件（BFF 无 DB，用本地 JSON 保证赠送幂等）
 PROMO_STATE_FILE: str = os.getenv(
@@ -195,14 +210,14 @@ PROMO_STATE_FILE: str = os.getenv(
 )
 
 # 充值档位（元）
-PAY_AMOUNTS: tuple = tuple(
+_DEF_PAY_AMOUNTS: tuple = tuple(
     int(x) for x in os.getenv("BFF_PAY_AMOUNTS", "10,30,50,100,300,500").split(",") if x.strip()
 )
 
 
 # ==================== 兑换码登录 ====================
 # 是否开放「兑换码登录」入口（关掉后登录页不显示该 Tab，接口也直接拒绝）
-REDEEM_LOGIN_ENABLED: bool = _bool("BFF_REDEEM_LOGIN_ENABLED", True)
+_DEF_REDEEM_LOGIN_ENABLED: bool = _bool("BFF_REDEEM_LOGIN_ENABLED", True)
 
 # 兑换码校验的分页遍历上限（100 条/页）。
 # new-api 的 search 不匹配 key 字段，只能翻列表比对，码量大时需调高此值。
@@ -214,29 +229,29 @@ REDEEM_CODE_PATTERN: str = os.getenv("BFF_REDEEM_CODE_PATTERN", r"^[A-Za-z0-9\-_
 
 
 # ==================== 品牌与站点配置 ====================
-# 全部支持环境变量覆盖 —— 换品牌、换域名、换模型不需要改代码。
-BRAND_NAME: str = os.getenv("BFF_BRAND_NAME", "NexusAPI")
+# 全部支持环境变量覆盖 + 管理员在线修改 —— 换品牌、换域名、换模型不需要改代码。
+_DEF_BRAND_NAME: str = os.getenv("BFF_BRAND_NAME", "NexusAPI")
 # Logo 方块里的字母；留空则自动取品牌名首字符
-BRAND_LOGO_TEXT: str = os.getenv("BFF_BRAND_LOGO_TEXT", "").strip()
-BRAND_TAGLINE: str = os.getenv("BFF_BRAND_TAGLINE", "登录以管理你的 API 额度与密钥")
-BRAND_HERO_TITLE: str = os.getenv("BFF_BRAND_HERO_TITLE", "一个 Key，接入全部主流大模型")
+_DEF_BRAND_LOGO_TEXT: str = os.getenv("BFF_BRAND_LOGO_TEXT", "").strip()
+_DEF_BRAND_TAGLINE: str = os.getenv("BFF_BRAND_TAGLINE", "登录以管理你的 API 额度与密钥")
+_DEF_BRAND_HERO_TITLE: str = os.getenv("BFF_BRAND_HERO_TITLE", "一个 Key，接入全部主流大模型")
 # 首页大标题拆两段：前半普通色 + 后半渐变高亮
-BRAND_HERO_H1: str = os.getenv("BFF_BRAND_HERO_H1", "一个 API Key")
-BRAND_HERO_H1_ACCENT: str = os.getenv("BFF_BRAND_HERO_H1_ACCENT", "所有主流大模型")
-BRAND_HERO_H1_PREFIX: str = os.getenv("BFF_BRAND_HERO_H1_PREFIX", "接入")
-BRAND_HERO_SUB: str = os.getenv(
+_DEF_BRAND_HERO_H1: str = os.getenv("BFF_BRAND_HERO_H1", "一个 API Key")
+_DEF_BRAND_HERO_H1_ACCENT: str = os.getenv("BFF_BRAND_HERO_H1_ACCENT", "所有主流大模型")
+_DEF_BRAND_HERO_H1_PREFIX: str = os.getenv("BFF_BRAND_HERO_H1_PREFIX", "接入")
+_DEF_BRAND_HERO_SUB: str = os.getenv(
     "BFF_BRAND_HERO_SUB",
     "GPT、Claude、DeepSeek、Qwen…统一 OpenAI 兼容接口，计费透明可控。",
 )
-BRAND_HERO_BADGE: str = os.getenv("BFF_BRAND_HERO_BADGE", "全线模型在线 · 99.9% 可用性")
-BRAND_ICP: str = os.getenv("BFF_BRAND_ICP", "").strip()          # 备案号，留空不显示
-BRAND_CONTACT: str = os.getenv("BFF_BRAND_CONTACT", "").strip()  # 客服联系方式
+_DEF_BRAND_HERO_BADGE: str = os.getenv("BFF_BRAND_HERO_BADGE", "全线模型在线 · 99.9% 可用性")
+_DEF_BRAND_ICP: str = os.getenv("BFF_BRAND_ICP", "").strip()          # 备案号，留空不显示
+_DEF_BRAND_CONTACT: str = os.getenv("BFF_BRAND_CONTACT", "").strip()  # 客服联系方式
 
 # 教程页 / 代码示例参数
-API_BASE_URL: str = os.getenv("BFF_API_BASE_URL", NEWAPI_BASE_URL.rstrip("/") + "/v1")
-DOC_DEFAULT_MODEL: str = os.getenv("BFF_DOC_DEFAULT_MODEL", "gpt-4o-mini")
+_DEF_API_BASE_URL: str = os.getenv("BFF_API_BASE_URL", NEWAPI_BASE_URL.rstrip("/") + "/v1")
+_DEF_DOC_DEFAULT_MODEL: str = os.getenv("BFF_DOC_DEFAULT_MODEL", "gpt-4o-mini")
 # 首页/文档页展示的模型清单（逗号分隔）
-DOC_MODELS: tuple = tuple(
+_DEF_DOC_MODELS: tuple = tuple(
     m.strip() for m in os.getenv(
         "BFF_DOC_MODELS",
         "gpt-4o,gpt-4o-mini,claude-sonnet-4,deepseek-chat,gemini-2.0-flash",
@@ -246,7 +261,8 @@ DOC_MODELS: tuple = tuple(
 
 def brand_logo_text() -> str:
     """Logo 字母：显式配置优先，否则取品牌名首字符。"""
-    return BRAND_LOGO_TEXT or (BRAND_NAME[:1].upper() if BRAND_NAME else "A")
+    name = _dyn("BRAND_NAME")
+    return _dyn("BRAND_LOGO_TEXT") or (name[:1].upper() if name else "A")
 
 
 # 镜像版本：Dockerfile 把构建期的 APP_VERSION 转成运行时的 BFF_VERSION。
@@ -261,3 +277,54 @@ APP_VERSION: str = os.getenv("BFF_VERSION", "dev")
 LOGFIRE_TOKEN: str = os.getenv("LOGFIRE_TOKEN", "").strip()
 LOGFIRE_ENVIRONMENT: str = os.getenv("LOGFIRE_ENVIRONMENT", "local").strip()
 LOGFIRE_ENABLED: bool = bool(LOGFIRE_TOKEN)
+
+
+# ==================== 动态配置解析（运行时覆盖）====================
+# 上面带 _DEF_ 前缀的都是「环境变量默认值」。真实取值经这里解析：
+# **管理员在线覆盖 > 环境变量 / .env > 代码默认值**。
+#
+# ## 为什么用模块级 __getattr__（PEP 562）而不是把每处都改成 getter
+#
+# 全仓库读配置的写法统一是 `from . import config` + `config.XXX`（已逐一核对
+# store / promo / main / security / newapi_client / redeem_code 六个模块），
+# 没有任何一处 `from .config import XXX`。这意味着只要拦住属性访问，
+# 50+ 个调用点全部自动变成动态读取，无需改动业务代码 ——
+# 改法越小，出错面越小，这是刻意选择。
+#
+# 反之若改成 brand_name() 之类的 getter，就要同步改 main.py 里几十处引用、
+# promo.py 的活动计算、以及全部现存测试的断言，收益相同而风险高得多。
+#
+# 注意：__getattr__ 只在「属性不存在于模块命名空间」时触发，所以可覆盖项
+# 必须以 _DEF_ 前缀命名，不能同时存在同名模块级常量，否则永远读不到覆盖值。
+def _dyn(name: str):
+    """取动态配置值。供本模块内部函数使用（模块内的全局查找不走 __getattr__）。"""
+    default = globals()[f"_DEF_{name}"]
+    try:
+        from . import settings
+    except ImportError:      # 极早期导入阶段的保护，正常运行不会走到
+        return default
+    value = settings.get(name, default)
+    # 环境变量默认值是 tuple（PAY_AMOUNTS / DOC_MODELS），而 JSON 里存的是 list。
+    # 统一成 tuple，避免调用方对 `in` 之外的行为（如可哈希性）产生分歧。
+    if isinstance(default, tuple) and isinstance(value, list):
+        return tuple(value)
+    return value
+
+
+# 可动态覆盖的键集合。以 _DEF_ 常量为唯一事实源自动推导，
+# 避免新增字段时忘记同步登记（漏登记的表现是「页面能改、后端不认」）。
+DYNAMIC_KEYS: frozenset = frozenset(
+    k[len("_DEF_"):] for k in tuple(globals()) if k.startswith("_DEF_")
+)
+
+
+def __getattr__(name: str):
+    """模块级属性兜底：把可覆盖项的读取转向运行时配置。"""
+    if name in DYNAMIC_KEYS:
+        return _dyn(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def defaults() -> dict:
+    """各可覆盖项的环境变量默认值。管理页用它显示「重置后会变成什么」。"""
+    return {k: globals()[f"_DEF_{k}"] for k in DYNAMIC_KEYS}

@@ -42,8 +42,9 @@ from pydantic import BaseModel
 
 from . import config, observability, promo, redeem_code, store
 from . import newapi_client as na
+from . import settings as dyn_settings
 from .newapi_client import NewApiError
-from .security import clear_session, require_session, set_session
+from .security import clear_session, is_admin, require_admin, require_session, set_session
 
 logger = logging.getLogger("bff")
 logging.basicConfig(level=logging.INFO)
@@ -184,7 +185,9 @@ async def login(body: LoginBody, request: Request, response: Response):
         return fail("用户名和密码不能为空")
     if MOCK:
         user = store.get_or_create_user(username, body.password)
-        set_session(response, {"uid": user["uid"], "username": user["username"], "pat": user["pat"]})
+        set_session(response, {"uid": user["uid"], "username": user["username"], "pat": user["pat"],
+                               # mock 无真实角色，管理页入口靠 BFF_ADMIN_USERNAMES 名单
+                               "role": 0})
         await promo.grant_signup(user["uid"])
         return ok({"username": user["username"]}, "登录成功")
     try:
@@ -196,7 +199,9 @@ async def login(body: LoginBody, request: Request, response: Response):
         if "password" in msg.lower() or "用户名或密码" in msg or e.status_code == 400:
             msg = "用户名或密码错误"
         return fail(msg, 401 if e.status_code in (400, 401) else e.status_code)
-    set_session(response, {"uid": info["uid"], "username": info["username"], "pat": info["pat"]})
+    set_session(response, {"uid": info["uid"], "username": info["username"], "pat": info["pat"],
+                           # 上游若不返回 role 就存 0（非管理员），管理权限另有静态名单兜底
+                           "role": int((info.get("user") or {}).get("role") or 0)})
     return ok({"username": info["username"]}, "登录成功")
 
 
@@ -217,7 +222,8 @@ async def login_by_code(body: CodeLoginBody, request: Request, response: Respons
         return fail("兑换码格式不正确，请检查后重试")
     info = await redeem_code.login_or_create(code, client_ip=client_ip(request))
     set_session(response, {"uid": info["uid"], "username": info["username"],
-                           "pat": info["pat"]})
+                           # 兑换码账号是自动建号的普通用户，恒非管理员
+                           "pat": info["pat"], "role": 0})
     pts = config.quota_to_points(info.get("redeemed_quota", 0))
     if info["is_new"]:
         msg = (f"兑换成功，到账 {pts:,} {config.POINTS_UNIT_NAME}"
@@ -249,8 +255,9 @@ async def bind_account(body: BindBody, response: Response,
     # 改账密后旧 PAT 是否仍有效不做假设，直接用新账密重登换一份新的，
     # 避免用户绑定完立刻遇到 401。
     info = await _relogin(username, body.password, request_ip=None)
+    # 绑定的前提是兑换码账号（上方已校验），故恒为普通用户
     set_session(response, {"uid": info["uid"], "username": info["username"],
-                           "pat": info["pat"]})
+                           "pat": info["pat"], "role": 0})
     return ok({"username": username}, "绑定成功，以后可用该账号密码登录")
 
 
@@ -285,7 +292,8 @@ async def register(body: RegisterBody, request: Request, response: Response):
         if username in store.users:
             return fail("用户名已存在，请直接登录")
         user = store.get_or_create_user(username, body.password, body.email)
-        set_session(response, {"uid": user["uid"], "username": user["username"], "pat": user["pat"]})
+        set_session(response, {"uid": user["uid"], "username": user["username"],
+                               "pat": user["pat"], "role": 0})
         gift = await promo.grant_signup(user["uid"])
         return ok({"username": user["username"], "gift_points": gift}, "注册成功")
     # 真实模式：管理员影子建号 → 用户密码登录换 PAT
@@ -297,7 +305,9 @@ async def register(body: RegisterBody, request: Request, response: Response):
             msg = "用户名已存在，请直接登录"
         return fail(msg, e.status_code if e.status_code != 502 else 502)
     info = await na.login(username, body.password, client_ip=client_ip(request))
-    set_session(response, {"uid": info["uid"], "username": info["username"], "pat": info["pat"]})
+    # 新注册账号必然是普通用户，无需读取上游 role
+    set_session(response, {"uid": info["uid"], "username": info["username"],
+                           "pat": info["pat"], "role": 0})
     gift = await promo.grant_signup(info["uid"])
     msg = f"注册成功，已赠送 {gift:,} {config.POINTS_UNIT_NAME}" if gift else "注册成功"
     return ok({"username": info["username"], "gift_points": gift}, msg)
@@ -310,7 +320,8 @@ async def logout(response: Response):
 
 
 def _self_payload(uid: int, username: str, email: str, quota: int,
-                  used_quota: int, request_count: int) -> dict:
+                  used_quota: int, request_count: int,
+                  session: dict | None = None) -> dict:
     is_rc = redeem_code.is_redeem_account(username)
     # 影子建号（注册/兑换码）没有真实邮箱，上游会补一个 <username>@example.com 占位。
     # 把它显示给用户既无意义，还会泄露内部派生的 rc_xxx 用户名 —— 一律隐去。
@@ -331,6 +342,9 @@ def _self_payload(uid: int, username: str, email: str, quota: int,
                                  config.PROMO_FIRST_TOPUP_ENABLED,
         # 兑换码影子账号：前端据此提示「绑定账号」，避免用户丢码即丢余额
         "is_redeem_account": redeem_code.is_redeem_account(username),
+        # 仅用于前端决定是否显示管理入口。真正的鉴权在 require_admin，
+        # 前端把这个字段改成 true 也调不通任何 /api/admin/* 接口。
+        "is_admin": is_admin(session) if session else False,
     }
 
 
@@ -341,11 +355,12 @@ async def user_self(session: dict = Depends(require_session)):
         if user is None:
             raise HTTPException(status_code=401, detail="用户不存在")
         return ok(_self_payload(user["uid"], user["username"], user["email"],
-                                user["quota"], user["used_quota"], user["request_count"]))
+                                user["quota"], user["used_quota"],
+                                user["request_count"], session))
     d = await na.get_self(session["pat"], session["uid"])
     return ok(_self_payload(d["id"], d["username"], d.get("email"),
                             d.get("quota", 0), d.get("used_quota", 0),
-                            d.get("request_count", 0)))
+                            d.get("request_count", 0), session))
 
 
 # ==================== API Key 管理 ====================
@@ -683,6 +698,68 @@ async def mock_create_redemption(body: MockRedemptionBody):
             for _ in range(max(1, min(body.count, 20)))]
     return ok({"keys": [r["key"] for r in recs],
                "points": config.cny_to_points(cny)}, "已发放")
+
+
+# ==================== 管理员：动态配置 ====================
+class SettingsPatchBody(BaseModel):
+    values: dict
+
+
+class SettingsResetBody(BaseModel):
+    keys: list[str]
+
+
+def _settings_view() -> dict:
+    """管理页所需的完整视图：字段元数据 + 当前值 + 默认值 + 是否被覆盖。
+
+    元数据由后端下发而非前端硬编码 —— 否则每加一个配置项都要改两处，
+    且前端漏改的表现是「字段存在却不可见」，比报错更难发现。
+    """
+    defaults = config.defaults()
+    items = []
+    for key, (group, label, _fn, hint) in dyn_settings.SPECS.items():
+        default = defaults[key]
+        items.append({
+            "key": key, "group": group, "label": label, "hint": hint,
+            "type": ("bool" if isinstance(default, bool)
+                     else "int" if isinstance(default, int)
+                     else "float" if isinstance(default, float)
+                     else "list" if isinstance(default, tuple | list)
+                     else "str"),
+            "value": getattr(config, key),
+            "default": list(default) if isinstance(default, tuple) else default,
+            "overridden": dyn_settings.has_override(key),
+        })
+    return {
+        "items": items,
+        "groups": [{"key": k, "label": v}
+                   for k, v in dyn_settings.GROUP_LABELS.items()],
+    }
+
+
+@app.get("/api/admin/settings")
+async def admin_settings_get(_s: dict = Depends(require_admin)):
+    return ok(_settings_view())
+
+
+@app.put("/api/admin/settings")
+async def admin_settings_put(body: SettingsPatchBody,
+                             _s: dict = Depends(require_admin)):
+    try:
+        await dyn_settings.update(body.values)
+    except dyn_settings.ValidationError as e:
+        return fail(str(e), 400)
+    return ok(_settings_view(), "已保存，立即生效")
+
+
+@app.post("/api/admin/settings/reset")
+async def admin_settings_reset(body: SettingsResetBody,
+                               _s: dict = Depends(require_admin)):
+    try:
+        await dyn_settings.reset(body.keys)
+    except dyn_settings.ValidationError as e:
+        return fail(str(e), 400)
+    return ok(_settings_view(), "已重置为环境变量默认值")
 
 
 # ==================== 健康检查 ====================

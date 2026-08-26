@@ -1,0 +1,10 @@
+# 只让 requirements.txt / app / static 进构建上下文，其余全部排除。
+# 上下文越小构建越快，也避免把 .env、data/ 里的管理员 PAT 意外烤进镜像。
+*
+!requirements.txt
+!app/
+!static/
+
+# 上面白名单目录里仍要剔除的内容
+**/__pycache__/
+**/*.py[cod]

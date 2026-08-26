@@ -15,7 +15,9 @@ from typing import Optional
 
 from . import config
 
-# 换算口径统一由 config 提供（1 元 = QUOTA_PER_CNY quota = POINTS_PER_CNY 积分）
+# 换算口径统一由 config 提供（1 元 = QUOTA_PER_CNY quota = POINTS_PER_CNY 积分）。
+# QUOTA_PER_CNY 不可在线修改（new-api 内部口径），故此处可安全绑定为常量；
+# 两个换算函数是函数引用，内部按调用时刻读取动态积分汇率，无需改写。
 QUOTA_PER_UNIT = config.QUOTA_PER_CNY
 quota_to_points = config.quota_to_points
 points_to_quota = config.points_to_quota
