@@ -55,6 +55,7 @@ import json as _json
 import logging
 import os
 from typing import Any, Optional
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -259,6 +260,44 @@ async def request(method: str, path: str, *, headers: dict, json: Any = None,
 
 
 # ---------- 认证 ----------
+async def send_verification(email: str, client_ip: str | None = None) -> None:
+    """请求上游给 email 发注册验证码。
+
+    实测契约（v1.0.0-rc.24）：**GET** `/api/verification?email=<addr>&turnstile=`
+    —— 不是 POST+JSON，参数走 query；turnstile 站点开关关闭时传空串即可。
+    验证码由 new-api 侧生成并存活 10 分钟，BFF 不持有、也无法校验它，
+    最终校验必须交给上游 `/api/user/register`（见 main.py 注册流程）。
+
+    失败一律是 HTTP 200 + success:false（request() 已统一转成 NewApiError），
+    常见 message：
+    - `invalid SMTP account`  → 上游没配 SMTP
+    - `550 The recipient may contain a non-existent account...`
+                              → SMTP 正常，但收件地址不存在（用户填错邮箱）
+    """
+    await request("GET", "/api/verification", headers={},
+                  params={"email": email, "turnstile": ""},
+                  client_ip=client_ip)
+
+
+async def register_user(username: str, password: str, email: str,
+                        verification_code: str,
+                        client_ip: str | None = None) -> None:
+    """走上游原生注册端建号，由上游校验邮箱验证码并绑定邮箱。
+
+    为什么不用 admin_create_user 影子建号：管理员建号接口不校验验证码、
+    也不写 email 字段，等于把邮箱验证整条链路旁路掉 —— 邮箱既没验证也没绑定，
+    用户后续无法用邮箱找回密码。站点 email_verification=True 时必须走这里。
+
+    实测 message：
+    - `Email verification is enabled, please enter email address and verification code`
+    - `Verification code is incorrect or has expired`
+    """
+    await request("POST", "/api/user/register", headers={},
+                  json={"username": username, "password": password,
+                        "email": email, "verification_code": verification_code},
+                  client_ip=client_ip)
+
+
 async def login(username: str, password: str, client_ip: str | None = None) -> dict:
     """密码登录 → 换 PAT → **立刻归还会话**。返回 {uid, username, pat, user}。
 
@@ -400,11 +439,63 @@ async def pay_amount(pat: str, uid: int, amount: int, method: str) -> str:
     return str(body["data"])
 
 
+def _trade_no_from_url(url: str) -> str:
+    """从网关跳转地址里抽商户订单号。
+
+    只认 out_trade_no / trade_no 两个键（易支付两种命名都在野生环境出现过），
+    抽不到就返回空串 —— 空串会让上层退回余额比对兜底，比编一个订单号安全。
+    """
+    if not url:
+        return ""
+    try:
+        q = parse_qs(urlparse(url).query)
+    except ValueError:
+        return ""
+    for key in ("out_trade_no", "trade_no"):
+        vals = q.get(key) or []
+        if vals and str(vals[0]).strip():
+            return str(vals[0]).strip()
+    return ""
+
+
 async def pay_create(pat: str, uid: int, amount: int, method: str) -> dict:
-    """返回 {url, params}：易支付网关地址与表单字段，前端表单提交跳转。"""
+    """创建支付订单，返回归一化结构 {mode, url, params, order_no}。
+
+    mode 有两种，取决于上游把 data 返回成什么类型：
+      - "form"     data 是对象 → 易支付表单字段，前端构表单 POST 跳收银台
+      - "redirect" data 是字符串 → 网关直给一个跳转地址，前端直接打开
+
+    **必须同时支持两种**：new-api 的 epay 适配在不同网关/不同版本下返回类型不同，
+    实测微信支付（wxpay）走的就是「data 为字符串 URL」这一支。原实现写死按对象
+    处理（body["data"].get(...)），微信充值必然抛
+    AttributeError: 'str' object has no attribute 'get'，用户点一次充值就 500。
+
+    order_no 在此处解析而不是留给上层：redirect 分支的订单号只能从 URL query 里抽，
+    上层不该关心「订单号藏在哪」这种网关细节。抽不到就是空串，上层据此退回
+    余额比对兜底（见 main.py 的 _pay_status_by_balance）。
+    """
     body = await request("POST", "/api/user/pay", headers=user_headers(pat, uid),
                          json={"amount": amount, "payment_method": method, "top_up_code": ""})
-    return {"url": body.get("url", ""), "params": body["data"]}
+    if not isinstance(body, dict):
+        raise NewApiError("上游支付接口返回格式异常", status_code=502)
+    data = body.get("data")
+    url = str(body.get("url") or "")
+
+    if isinstance(data, dict):
+        order_no = str(data.get("out_trade_no") or data.get("trade_no") or "")
+        return {"mode": "form", "url": url, "params": data, "order_no": order_no}
+
+    if isinstance(data, str) and data.strip():
+        target = data.strip()
+        # data 是字符串时它本身就是收银台地址；body.url 此时通常为空，
+        # 极少数网关两者都给，以 data 为准（url 可能只是网关根地址）。
+        return {"mode": "redirect", "url": target, "params": {},
+                "order_no": _trade_no_from_url(target)}
+
+    # data 既不是对象也不是可用字符串：上游大概率报错但 HTTP 200。
+    # 明确抛错好过把空表单交给前端 —— 后者表现为「点了充值弹出空白页」，无从排查。
+    raise NewApiError(f"上游未返回可用的支付参数（data={type(data).__name__}）",
+                      status_code=502)
 
 
 # 充值订单状态（实测 GET /api/user/topup/self 返回值）

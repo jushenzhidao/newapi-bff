@@ -44,10 +44,12 @@ logger = logging.getLogger("bff.settings")
 
 # 刻意不 import config：config 在模块级 import 本模块用于解析取值，
 # 反向 import 会形成循环。故此处自行读取环境变量确定存储路径。
+_DATA_DIR: str = os.getenv("BFF_DATA_DIR") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
+)
 SETTINGS_FILE: str = os.getenv(
     "BFF_SETTINGS_FILE",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                 "data", "settings.json"),
+    os.path.join(_DATA_DIR, "settings.json"),
 )
 
 _lock = asyncio.Lock()
@@ -260,18 +262,30 @@ def _load() -> dict:
     return _cache
 
 
+class StorageError(RuntimeError):
+    """配置无法落盘。message 面向管理员，需说明如何修复而不只是报告失败。"""
+
+
 def _save(data: dict) -> None:
-    os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(SETTINGS_FILE), suffix=".tmp")
+    d = os.path.dirname(SETTINGS_FILE)
+    # makedirs 也要包在 try 里：容器根文件系统只读时它是第一个抛 OSError 的调用，
+    # 放在外面异常会裸奔到路由层变成无提示的 500。
+    tmp = ""
     try:
+        os.makedirs(d, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
         os.replace(tmp, SETTINGS_FILE)
-    except OSError:
-        logger.exception("保存动态配置失败")
-        if os.path.exists(tmp):
+    except OSError as e:
+        logger.exception("保存动态配置失败: %s", SETTINGS_FILE)
+        if tmp and os.path.exists(tmp):
             os.unlink(tmp)
-        raise
+        raise StorageError(
+            f"配置无法写入 {SETTINGS_FILE}（{e.strerror or e}）。"
+            "容器以只读根文件系统运行，请确认已挂载可写卷并把 BFF_DATA_DIR "
+            "或 BFF_SETTINGS_FILE 指向卷内路径。"
+        ) from e
 
 
 def get(key: str, default: Any) -> Any:

@@ -183,3 +183,25 @@ def test_reset_restores_doc_visibility(admin_client):
     ids = [p["id"] for p in admin_client.get("/api/docs").json()["data"]["products"]]
     assert len(ids) > 1
     assert "codex" in ids
+
+
+def test_readonly_fs_returns_actionable_error(admin_client, tmp_path, monkeypatch):
+    """只读文件系统下保存配置，要给出可操作的 500，而不是裸 OSError。
+
+    复现线上的 `OSError: [Errno 30] Read-only file system: '/app/data'`：
+    容器根文件系统只读时 os.makedirs 是第一个抛错的调用，修复前它在 _save 的
+    try 之外，异常会直接冒到路由层。
+    """
+    monkeypatch.setattr(
+        settings, "SETTINGS_FILE", str(tmp_path / "nope" / "settings.json")
+    )
+
+    def boom(*a, **kw):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(settings.os, "makedirs", boom)
+
+    r = admin_client.put("/api/admin/settings", json={"values": {"DOC_PRODUCTS": ["points"]}})
+    assert r.status_code == 500
+    # 错误信息必须点明修复手段，否则运维只能猜
+    assert "BFF_DATA_DIR" in r.json()["message"]

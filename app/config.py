@@ -203,10 +203,20 @@ _DEF_PROMO_FIRST_TOPUP_MIN_CNY: int = _int("BFF_PROMO_FIRST_TOPUP_MIN_CNY", 10) 
 _DEF_PROMO_FIRST_TOPUP_MAX_POINTS: int = _int("BFF_PROMO_FIRST_TOPUP_MAX_POINTS", 1000000)
 _DEF_PROMO_TITLE: str = os.getenv("BFF_PROMO_TITLE", "新用户首充翻倍")
 
+# ==================== 可写数据目录 ====================
+# 所有运行期写入的状态文件都落在这里。容器以 read_only 根文件系统运行，
+# 代码目录 /app 不可写，故默认值必须指向挂载卷而非源码同级的 data/。
+# 单机裸跑（无容器）时用 BFF_DATA_DIR 指回本地目录即可。
+# settings.py 因循环 import 无法引用本模块，那边有一份同样逻辑的解析，
+# 改这里的语义时务必同步过去。
+DATA_DIR: str = os.getenv("BFF_DATA_DIR") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
+)
+
 # 首充记录持久化文件（BFF 无 DB，用本地 JSON 保证赠送幂等）
 PROMO_STATE_FILE: str = os.getenv(
     "BFF_PROMO_STATE_FILE",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "promo_state.json"),
+    os.path.join(DATA_DIR, "promo_state.json"),
 )
 
 # 充值档位（元）
@@ -269,10 +279,10 @@ _DEF_DOC_PRODUCTS: tuple = tuple(
 # 定价表缓存秒数。上游 /api/pricing 匿名可读且变动不频繁，默认 10 分钟。
 _DEF_PRICING_TTL: int = _int("BFF_PRICING_TTL", 600)
 
-# 定价快照文件。默认与 PROMO_STATE_FILE 同目录，容器里由 compose 指向 /data 卷。
+# 定价快照文件。默认与 PROMO_STATE_FILE 同目录（见 DATA_DIR）。
 PRICING_SNAPSHOT_FILE: str = os.getenv(
     "BFF_PRICING_SNAPSHOT_FILE",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "pricing_snapshot.json"),
+    os.path.join(DATA_DIR, "pricing_snapshot.json"),
 )
 
 # 参与展示的模型分组白名单。留空 = 全部分组。

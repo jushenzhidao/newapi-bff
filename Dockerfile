@@ -40,10 +40,17 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH" \
     BFF_VERSION="${APP_VERSION}" \
+    # 可写数据目录。根文件系统以 read_only 运行，/app 不可写，所有落盘状态
+    # 必须在挂载卷里，否则写入抛 OSError: [Errno 30] Read-only file system。
+    # 下面逐项显式声明而非只靠 BFF_DATA_DIR：显式路径在 docker inspect 里
+    # 一眼可见，运维排查「文件到底写哪了」不用去翻代码的默认值。
+    BFF_DATA_DIR=/data \
     # 状态文件指向挂载卷，容器重建后首充/注册赠送的幂等记录不丢
     BFF_PROMO_STATE_FILE=/data/promo_state.json \
     BFF_ADMIN_CRED_FILE=/data/admin_cred.json \
     BFF_PRICING_SNAPSHOT_FILE=/data/pricing_snapshot.json \
+    # 后台「保存配置」写这里。漏掉它会让管理页面每次保存都 500。
+    BFF_SETTINGS_FILE=/data/settings.json \
     # 只信任本机来的 X-Forwarded-For。app/main.py 的 client_ip() 取 XFF 首段
     # 转给 new-api 做按 IP 限流，若信任任意来源，客户端自带一个伪造 XFF 就能
     # 绕过限流。反代不在同一 network namespace 时，改为反代的实际来源 IP。

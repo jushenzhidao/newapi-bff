@@ -514,15 +514,15 @@ function renderRegister() {
         </div>
         <div class="field">
           <label>邮箱</label>
-          <input id="r-email" type="email" placeholder="用于接收验证码">
+          <input id="r-email" type="email" placeholder="用于接收验证码" required>
         </div>
         <div class="field">
           <label>邮箱验证码</label>
           <div class="field-row">
-            <input id="r-code" placeholder="6 位数字" maxlength="6">
+            <input id="r-code" placeholder="6 位数字" maxlength="6" required>
             <button class="btn btn-outline" id="r-send" type="button">获取验证码</button>
           </div>
-          <div class="hint">演示环境：验证码模拟发送，任意 6 位数字均可</div>
+          <div class="hint">验证码将发送到上方邮箱，10 分钟内有效；请确认邮箱可正常收信</div>
         </div>
         <button class="btn btn-primary btn-block" id="r-submit" type="submit">注 册</button>
       </form>
@@ -535,6 +535,7 @@ function renderRegister() {
   sendBtn.onclick = async () => {
     const email = document.getElementById("r-email").value.trim();
     if (!email) return toast("请先填写邮箱", "error");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return toast("邮箱格式不正确", "error");
     sendBtn.disabled = true;
     try {
       const r = await api("/api/verification", { method: "POST", body: { email } });
@@ -1043,8 +1044,9 @@ function bindPayTab() {
       const r = await api("/api/user/pay", { method: "POST", body: { amount: st.amount, payment_method: st.method } });
       const d = r.data;
       if (d.mode === "epay") {
-        // 真实模式：构建表单跳转易支付收银台（新窗口），本页轮询到账
-        submitEpayForm(d.gateway, d.params);
+        // 真实模式：打开易支付收银台（新窗口），本页轮询到账。
+        // 两种形态：微信支付等网关直接给跳转地址（redirect），支付宝等给表单字段（form）。
+        openCashier(d);
         showPayWaiting(d);
       } else {
         showMockCashier(d);
@@ -1055,6 +1057,25 @@ function bindPayTab() {
       setLoading(btn, false);
     }
   };
+}
+
+// 打开收银台。两种网关形态由后端 gateway_mode 指明：
+//   redirect —— 上游只给一个跳转地址（微信支付走这条），直接新窗口打开
+//   form     —— 上游给易支付表单字段，需构表单 POST 提交
+// 之所以不靠「params 是否为空」自动判断：空 params 也可能是上游异常，
+// 那种情况下静默跳到网关根地址会得到一个看不懂的错误页。
+function openCashier(order) {
+  if (order.gateway_mode === "redirect") {
+    const w = window.open(order.gateway, "_blank");
+    if (!w) {
+      // 弹窗被拦时必须留一个用户可点的入口，否则页面只是转圈、钱永远付不出去。
+      // 记在 order 上，由等待弹窗渲染成链接（见 showPayWaiting）。
+      order.blocked = true;
+      toast("浏览器拦截了新窗口，请点弹窗里的链接继续支付", "error");
+    }
+    return;
+  }
+  submitEpayForm(order.gateway, order.params);
 }
 
 function submitEpayForm(gateway, params) {
@@ -1083,6 +1104,7 @@ function showPayWaiting(order) {
       <div class="muted" style="margin-top:6px">订单金额 ¥${order.amount}${order.bonus_points ? ` · 含首充赠送 ${fmtPoints(order.bonus_points)}` : ""}</div>
       <div class="muted" style="margin-top:6px">订单号 <span class="mono">${esc(order.order_no)}</span></div>
       <div class="muted" id="pw-hint" style="margin-top:6px">支付完成后本页会自动检测到账，请勿关闭</div>
+      ${order.blocked ? `<div style="margin-top:8px"><a href="${esc(order.gateway)}" target="_blank" rel="noopener noreferrer">收银台被拦截，点此手动打开</a></div>` : ""}
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" id="pw-close">取消等待</button>

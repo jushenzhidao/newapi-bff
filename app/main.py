@@ -286,12 +286,37 @@ async def _relogin(username: str, password: str, request_ip: str | None):
     return await na.login(username, password, client_ip=request_ip)
 
 
+def _mail_error(msg: str) -> str:
+    """把上游英文邮件报错翻成用户能照着处理的中文。
+
+    上游 message 直接来自 SMTP 服务器响应，原文对终端用户没有指导意义。
+    """
+    low = msg.lower()
+    if "invalid smtp" in low or "smtp account" in low:
+        return "邮件服务未配置，请联系管理员"
+    if "550" in msg or "non-existent account" in low or "recipient" in low:
+        return "该邮箱地址不存在，请检查后重新输入"
+    if "incorrect or has expired" in low:
+        return "验证码错误或已过期，请重新获取"
+    if "verification is enabled" in low:
+        return "请填写邮箱并获取验证码"
+    return msg
+
+
 @app.post("/api/verification")
-async def send_verification(body: VerificationBody):
+async def send_verification(body: VerificationBody, request: Request):
     email = body.email.strip()
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         return fail("邮箱格式不正确")
-    return ok(None, f"验证码已发送至 {email}（演示：任意 6 位数字均可）")
+    if MOCK:
+        return ok(None, f"验证码已发送至 {email}（演示：任意 6 位数字均可）")
+    try:
+        await na.send_verification(email, client_ip=client_ip(request))
+    except NewApiError as e:
+        # 直接透传客户端的状态码：上游业务失败已在 newapi_client 归一成 400
+        # （newapi_client.py:258），网络类故障保持 502/503/429 原样。
+        return fail(_mail_error(e.message), e.status_code)
+    return ok(None, f"验证码已发送至 {email}，10 分钟内有效")
 
 
 @app.post("/api/user/register")
@@ -314,14 +339,31 @@ async def register(body: RegisterBody, request: Request, response: Response):
                                "pat": user["pat"], "role": 0})
         gift = await promo.grant_signup(user["uid"])
         return ok({"username": user["username"], "gift_points": gift}, "注册成功")
-    # 真实模式：管理员影子建号 → 用户密码登录换 PAT
+    # 真实模式：走上游原生注册端 → 用户密码登录换 PAT
+    #
+    # 必须用 na.register_user 而非 admin_create_user：管理员建号接口既不校验
+    # 邮箱验证码、也不写 email 字段，会把整条邮箱验证链路旁路掉 —— 用户拿到的是
+    # 一个邮箱未绑定的账号，日后无法用邮箱找回密码。验证码状态只存在上游，
+    # BFF 无从校验，因此把 email + verification_code 原样交给上游裁决。
+    email = body.email.strip()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return fail("邮箱格式不正确")
     try:
-        await na.admin_create_user(username, body.password, username)
+        await na.register_user(username, body.password, email,
+                               body.verification_code,
+                               client_ip=client_ip(request))
     except NewApiError as e:
         msg = e.message
-        if "已存在" in msg or "exist" in msg.lower() or "duplicate" in msg.lower():
+        low = msg.lower()
+        # 先判验证码类错误："has expired" 含 "exist" 子串，若先做重名匹配，
+        # 验证码过期会被误报成「用户名已存在」—— 用户会去改用户名，越改越错。
+        if "verification" in low or "expired" in low or "验证码" in msg:
+            msg = _mail_error(msg)
+        elif "已存在" in msg or "exist" in low or "duplicate" in low:
             msg = "用户名已存在，请直接登录"
-        return fail(msg, e.status_code if e.status_code != 502 else 502)
+        else:
+            msg = _mail_error(msg)
+        return fail(msg, e.status_code)
     info = await na.login(username, body.password, client_ip=client_ip(request))
     # 新注册账号必然是普通用户，无需读取上游 role
     set_session(response, {"uid": info["uid"], "username": info["username"],
@@ -548,9 +590,12 @@ async def create_pay_order(body: PayBody, session: dict = Depends(require_sessio
     pat = session["pat"]
     payable = await na.pay_amount(pat, uid, body.amount, body.payment_method)
     gw = await na.pay_create(pat, uid, body.amount, body.payment_method)
-    return ok({"mode": "epay", "payable": payable,
+    # gateway_mode 区分「表单 POST 提交」与「直接跳转 URL」两种收银台形态。
+    # 微信支付走后者（上游 data 返回字符串地址），必须让前端知道该走哪条路 ——
+    # 否则会把一个 URL 字符串当对象去遍历字段，构出空表单。
+    return ok({"mode": "epay", "gateway_mode": gw["mode"], "payable": payable,
                "gateway": gw["url"], "params": gw["params"],
-               "order_no": gw["params"].get("out_trade_no", ""), **common}, "订单已创建")
+               "order_no": gw["order_no"], **common}, "订单已创建")
 
 
 @app.post("/api/user/pay/status")
@@ -787,6 +832,9 @@ async def admin_settings_put(body: SettingsPatchBody,
         await dyn_settings.update(body.values)
     except dyn_settings.ValidationError as e:
         return fail(str(e), 400)
+    except dyn_settings.StorageError as e:
+        # 部署问题（卷没挂 / 路径不可写），不是请求内容的问题，用 500 而非 400。
+        return fail(str(e), 500)
     _invalidate_caches(body.values.keys())
     return ok(_settings_view(), "已保存，立即生效")
 
@@ -798,6 +846,8 @@ async def admin_settings_reset(body: SettingsResetBody,
         await dyn_settings.reset(body.keys)
     except dyn_settings.ValidationError as e:
         return fail(str(e), 400)
+    except dyn_settings.StorageError as e:
+        return fail(str(e), 500)
     _invalidate_caches(body.keys)
     return ok(_settings_view(), "已重置为环境变量默认值")
 

@@ -135,8 +135,17 @@ services:
       # 等于放弃「线上告警不被本地调试流量淹没」的能力。
       LOGFIRE_ENVIRONMENT: ${LOGFIRE_ENVIRONMENT:-}
 
-    # promo_state.json（赠送幂等）与 admin_cred.json（管理员 PAT）都在这里。
-    # 丢了这个卷：所有用户的首充资格会被重置，可被重复领取赠送。
+      # ---- 可写数据目录 ----
+      # 必须显式指到 /data 卷。代码里的默认值是源码同级的 ./data，在容器里就是
+      # /app/data —— 而根文件系统 read_only，任何写入都会抛
+      # OSError: [Errno 30] Read-only file system。
+      # 后台改配置、写首充记录、存定价快照全部依赖此项，不要删。
+      BFF_DATA_DIR: /data
+
+    # settings.json（后台配置覆盖）、promo_state.json（赠送幂等）、
+    # admin_cred.json（管理员 PAT）、pricing_snapshot.json 都在这里。
+    # 丢了这个卷：后台配置回落到环境变量默认值，且所有用户的首充资格会被
+    # 重置、可被重复领取赠送。
     volumes:
       - bff-data:/data
 
