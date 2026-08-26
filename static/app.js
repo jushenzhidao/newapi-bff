@@ -208,7 +208,11 @@ const routes = {
   "/topup": renderTopup,
   "/keys": renderKeys,
   "/logs": renderLogs,
-  "/docs": renderDocs,
+  // 教程页的渲染器定义在 docs.js，而 docs.js 在本文件之后加载。
+  // 这里必须包一层惰性调用：直接写 renderDocs 会在求值这个对象字面量时
+  // 就去取一个还不存在的绑定，抛 ReferenceError 并中断整个文件，
+  // 连末尾的 router() 都不会执行 —— 表现为整站白页。
+  "/docs": () => renderDocs(),
   "/admin": renderAdmin,
 };
 /* 教程是售前页面：未登录用户必须能读到消耗说明和安装步骤，
