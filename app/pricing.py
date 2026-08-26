@@ -54,7 +54,10 @@ logger = logging.getLogger(__name__)
 _QUOTA_PER_1K_AT_RATIO_1 = 1000
 
 # 快照文件：上游不可达时的兜底。由 scripts/refresh_pricing_snapshot.py 更新。
-_SNAPSHOT = Path(__file__).resolve().parent.parent / "data" / "pricing_snapshot.json"
+# 走配置而非写死相对路径：容器里状态卷挂在 /data，而 parent.parent/"data"
+# 解析出的是 /app/data —— 两者不是同一个目录，写死会让生产环境永远读不到快照，
+# 且因为 _load_snapshot() 只 warning 不抛异常，这个偏差不会有任何显性症状。
+_SNAPSHOT = Path(config.PRICING_SNAPSHOT_FILE)
 
 _cache: dict[str, Any] | None = None
 _cache_at: float = 0.0

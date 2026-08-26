@@ -269,6 +269,12 @@ _DEF_DOC_PRODUCTS: tuple = tuple(
 # 定价表缓存秒数。上游 /api/pricing 匿名可读且变动不频繁，默认 10 分钟。
 _DEF_PRICING_TTL: int = _int("BFF_PRICING_TTL", 600)
 
+# 定价快照文件。默认与 PROMO_STATE_FILE 同目录，容器里由 compose 指向 /data 卷。
+PRICING_SNAPSHOT_FILE: str = os.getenv(
+    "BFF_PRICING_SNAPSHOT_FILE",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "pricing_snapshot.json"),
+)
+
 # 参与展示的模型分组白名单。留空 = 全部分组。
 # 用途：keypool / 内部测试分组不该出现在售前价格表里。
 _DEF_PRICING_GROUPS: tuple = tuple(

@@ -1,9 +1,12 @@
-# 只让 requirements.txt / app / static 进构建上下文，其余全部排除。
+# 只让 requirements.txt / app / static / docs 进构建上下文，其余全部排除。
 # 上下文越小构建越快，也避免把 .env、data/ 里的管理员 PAT 意外烤进镜像。
 *
 !requirements.txt
 !app/
 !static/
+# docs/ 只含产品档案 YAML，是运行期数据（app/docs_catalog.py 启动时读取）。
+# 不放行会让 Dockerfile 的 COPY docs/ 因源路径不在上下文内而直接构建失败。
+!docs/
 
 # 上面白名单目录里仍要剔除的内容
 **/__pycache__/

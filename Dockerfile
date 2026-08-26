@@ -43,6 +43,7 @@ ENV PYTHONUNBUFFERED=1 \
     # 状态文件指向挂载卷，容器重建后首充/注册赠送的幂等记录不丢
     BFF_PROMO_STATE_FILE=/data/promo_state.json \
     BFF_ADMIN_CRED_FILE=/data/admin_cred.json \
+    BFF_PRICING_SNAPSHOT_FILE=/data/pricing_snapshot.json \
     # 只信任本机来的 X-Forwarded-For。app/main.py 的 client_ip() 取 XFF 首段
     # 转给 new-api 做按 IP 限流，若信任任意来源，客户端自带一个伪造 XFF 就能
     # 绕过限流。反代不在同一 network namespace 时，改为反代的实际来源 IP。
@@ -65,6 +66,9 @@ WORKDIR /app
 # 都不该进生产镜像（少一个文件少一处攻击面）。
 COPY --chown=bff:bff app/ ./app/
 COPY --chown=bff:bff static/ ./static/
+# docs/ 是运行期数据，不是文档：app/docs_catalog.py 从 /app/docs/products 读产品
+# 档案，漏拷会让 /readyz 的 doc_products_loadable 直接判定不通过。
+COPY --chown=bff:bff docs/ ./docs/
 
 # /data 存放 promo_state.json 与 admin_cred.json（含管理员 PAT）。
 # 目录权限收到 700 —— PAT 等同管理员密码。
