@@ -4,12 +4,13 @@ name: Release
 #
 # 两条通道刻意区别对待，见下方「生成镜像标签」步骤：
 #   tag 推送   -> 语义化版本 + latest，供生产部署引用
-#   主干推送   -> 只打分支名与 sha，不动 latest
-# 若主干推送也移动 latest，生产环境 `docker pull latest` 会拉到未经发布决策的
+#   分支推送   -> 只打分支名与 sha（如 dev-<sha7>），不动 latest
+# 若分支推送也移动 latest，生产环境 `docker pull latest` 会拉到未经发布决策的
 # 代码，且无法回滚到「上一个正式版本」——latest 必须只由 tag 移动。
+# dev 入列：产出 dev-<sha7> 测试镜像供测试环境拉取，latest 仍只由 tag 移动。
 on:
   push:
-    branches: [master, main]
+    branches: [master, main, dev]
     tags: ["v*"]
   # 允许在 Actions 页面手动发起，无需命令行打 tag
   workflow_dispatch:
