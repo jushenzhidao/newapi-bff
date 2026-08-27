@@ -10,7 +10,10 @@
 services:
   bff:
     image: ghcr.io/jushenzhidao/newapi-bff:${BFF_IMAGE:?BFF_IMAGE 必须设置，如 dev-a1b2c3d 或 latest}
-    container_name: newapi-bff
+    # 容器名参数化：dev 测试实例与生产实例并存时用 BFF_CONTAINER_NAME 区分
+    # （面板的模板名只是配置档案名，Docker 看不见它）。
+    # 并存时 BFF_PORT 也要错开，否则端口冲突。
+    container_name: ${BFF_CONTAINER_NAME:-newapi-bff}
     restart: unless-stopped
 
     # 只绑回环：生产 TLS 由宿主机 Nginx/Caddy 终止，防绕过反代的明文旁路。
