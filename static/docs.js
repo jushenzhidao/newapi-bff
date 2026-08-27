@@ -13,15 +13,20 @@
 /* 极简 Markdown：只支持档案里实际用到的语法。
  * 不引三方库是刻意的：教程文案由我们自己写，语法可控，
  * 引一个 40KB 的解析器去渲染几段加粗和列表不划算。 */
+/* 行内语法。先转义再替换标记，顺序不能反 —— 反了等于把用户内容当 HTML 执行。
+ * 表格单元格复用这个，不能走 docMd（那会包出 <p> 撑破行高）。 */
+function docInline(t) {
+  return esc(t)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+}
+
 function docMd(src) {
   const lines = String(src || "").split("\n");
   const out = [];
   let inList = false;
-  const inline = (t) =>
-    esc(t)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  const inline = docInline;
 
   for (const raw of lines) {
     const line = raw.trim();
@@ -72,15 +77,25 @@ async function docCopy(id, btn) {
 
 /* ---------- section 渲染注册表 ---------- */
 
+/* callout 语气 -> app.js ICONS 键名。用全站统一的 SVG，不引入 emoji
+ * （scripts/check_no_emoji.py 会拦）。 */
+const CALLOUT_ICON = { info: "info", warn: "alert", danger: "alert", success: "check" };
+
 const SECTION = {
   markdown: (s) => `<div class="card doc-prose">${
     s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""
   }${docMd(s.body)}</div>`,
 
+  /* 档案里统一写 tone/text，早期版本写过 level/body。两种都认：
+   * 字段名不匹配的后果是整段静默消失，而不是报错 —— 与其赌所有档案都改对，
+   * 不如让渲染器容错。 */
   callout: (s) => `
-    <div class="doc-callout ${esc(s.level || "info")}">
-      ${s.title ? `<b>${esc(s.title)}</b>` : ""}
-      <div>${docMd(s.body)}</div>
+    <div class="doc-callout ${esc(s.tone || s.level || "info")}">
+      <span class="doc-callout-ico">${ICONS[CALLOUT_ICON[s.tone || s.level] || "info"] || ""}</span>
+      <div class="doc-callout-body">
+        ${s.title ? `<b>${esc(s.title)}</b>` : ""}
+        <div>${docMd(s.text ?? s.body)}</div>
+      </div>
     </div>`,
 
   code: (s) => `<div class="card">${
@@ -90,15 +105,17 @@ const SECTION = {
   steps: (s) => `
     <div class="card">
       ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
+      <div class="doc-steps">
       ${(s.items || []).map((it, i) => `
         <div class="doc-step">
           <div class="step-no">${i + 1}</div>
           <div class="step-body">
-            <b>${esc(it.name)}</b>
-            ${it.body ? docMd(it.body) : ""}
+            ${it.name ? `<b>${esc(it.name)}</b>` : ""}
+            ${it.text ? docMd(it.text) : (it.body ? docMd(it.body) : "")}
             ${it.code ? docCode(it.code, it.lang) : ""}
           </div>
         </div>`).join("")}
+      </div>
     </div>`,
 
   faq: (s) => `
@@ -131,6 +148,28 @@ const SECTION = {
             ${t.body ? docMd(t.body) : ""}
             ${t.code ? docCode(t.code, t.lang) : ""}
           </div>`).join("")}
+      </div>`;
+  },
+
+  /* 静态表格。5 份占位档案都用了这个 type，缺渲染器时整段会静默消失 ——
+   * 页面看起来正常，只是「额度与消耗规则」凭空不见了。 */
+  table: (s) => {
+    const cols = s.columns || [];
+    const rows = s.rows || [];
+    if (!cols.length && !rows.length) return "";
+    return `
+      <div class="card">
+        ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
+        <div class="doc-table-wrap">
+          <table class="doc-table">
+            ${cols.length ? `<thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>` : ""}
+            <tbody>
+              ${rows.map((r) => `<tr>${(r || []).map((c, ci) =>
+                `<td${ci === 0 ? ' class="doc-model"' : ""}>${docInline(c)}</td>`).join("")}</tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+        ${s.note ? `<div class="doc-note">${docInline(s.note)}</div>` : ""}
       </div>`;
   },
 
