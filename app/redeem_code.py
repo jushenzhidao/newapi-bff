@@ -49,11 +49,11 @@ BFF 重装、换机器、删库都不影响 —— 只要 BFF_SECRET_KEY 不变�
   PUT    /api/user/ {id, username, password}
                                 → 管理员改账密；重名报 "Duplicate entry ... for key 'users.username'"
 """
+import asyncio
 import hashlib
 import hmac
 import logging
 import re
-import asyncio
 
 from . import config
 from . import newapi_client as na
