@@ -1,0 +1,10 @@
+# 换行符统一策略（跨 Windows 开发机 / Linux CI 构建机 / Docker 镜像）：
+#   Windows 脚本（.cmd/.bat/.ps1）必须 CRLF —— cmd.exe 对 LF-only 批处理会
+#   误解析（实测双击闪退）；PowerShell 同理保守处理。
+#   Shell 脚本必须 LF —— bash 对 CRLF 会报 `\r: command not found`。
+#   eol 属性对 checkout 生效于所有平台（含 Actions 的 Linux runner），
+#   不依赖各机器的 core.autocrlf 配置。
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+*.sh   text eol=lf

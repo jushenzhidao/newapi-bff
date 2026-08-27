@@ -1128,8 +1128,14 @@ async def setup_file(filename: str):
     path = _SETUP_DIR / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
+    body = path.read_bytes()
+    # Windows 批处理（.cmd/.bat）必须 CRLF 换行：LF-only 会被 cmd.exe 误解析，
+    # 表现为双击闪退。git 仓库按 LF 存储、Linux 镜像里也是 LF，这里在下发时
+    # 统一规范化为 CRLF（不依赖 git 配置，任何构建/运行环境都正确）。
+    if filename.lower().endswith((".cmd", ".bat")):
+        body = body.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
     return Response(
-        content=path.read_bytes(),
+        content=body,
         media_type="application/octet-stream",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
