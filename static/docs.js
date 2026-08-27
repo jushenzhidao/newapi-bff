@@ -19,7 +19,7 @@ function docMd(src) {
   let inList = false;
   const inline = (t) =>
     esc(t)
-      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img class="doc-img" alt="$1" src="$2">')
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img class="doc-img" alt="$1" src="$2" loading="lazy" decoding="async">')
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
@@ -76,7 +76,7 @@ function docVideo(v) {
   const poster = v.poster ? ` poster="${esc(v.poster)}"` : "";
   const title = v.title ? `<div class="doc-video-cap">${esc(v.title)}</div>` : "";
   return `<div class="doc-video-wrap">` +
-    `<video class="doc-video" controls preload="metadata" src="${esc(v.src)}"${poster}></video>${title}</div>`;
+    `<video class="doc-video" controls preload="none" src="${esc(v.src)}"${poster}></video>${title}</div>`;
 }
 
 /* 把 fields 段里标记为 __USER_KEY__ 的占位，替换为登录用户最新的 API Key。
@@ -150,7 +150,7 @@ const SECTION = {
                     ${f.copyable ? `<button class="doc-copy" type="button" onclick="copyDocField(this)">复制</button>` : ""}
                   </div>`).join("")}
               </div>` : ""}
-            ${it.image ? `<img class="doc-img" alt="${esc(it.name || "")}" src="${esc(it.image)}">` : ""}
+            ${it.image ? `<img class="doc-img" alt="${esc(it.name || "")}" src="${esc(it.image)}" loading="lazy" decoding="async">` : ""}
           </div>
         </div>`).join("")}
     </div>`,
