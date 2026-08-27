@@ -65,18 +65,17 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 # ===================== 已按你的 new-api 渠道配置 =====================
-# 本文件由官方模板（ai.modelzoo.tech）适配为 aihuobao.cn 渠道：
-#   - 拉取 /v1/models 时带 Authorization，返回该 token 在 model_limits
-#     白名单内的模型（gpt-4o / gpt-4o-mini / claude-sonnet-4 /
-#     deepseek-chat / gemini-2.0-flash）
+# 模型白名单与网关地址优先从站点配置接口动态获取（管理员后台「展示模型清单」
+# /「对外 API 地址」改了脚本自动跟随，无需发版）；拉取失败时降级到内置清单，
+# 配置不依赖网络也能完成。
 #   - 图片能力：gpt-4o / gpt-4o-mini / claude-sonnet-4 / gemini-2.0-flash
 #     支持图片输入；deepseek-chat 不支持（默认关闭图片输入）
-#   - 在线拉取失败时降级到内置清单，配置不依赖网络也能完成
 # ============================================================
+$setupConfigUrl = 'https://workbuddy.oneworker.cn/api/config'
 $setupApiBaseUrl = 'https://api.aihuobao.cn/v1'
 $setupEndpoint = $setupApiBaseUrl + '/models'
 $capabilitiesUrl = 'https://workbuddy.oneworker.cn/setup/workbuddy-model-capabilities.txt'
-# 内置默认模型列表：在线拉取 /models 失败时（连接层问题或 401/403 等任何错误）的兜底，
+# 内置默认模型列表：配置接口与 /models 都拉不到时的兜底，
 # 让配置不依赖网络也能写入。已同步为 aihuobao.cn token 白名单模型；
 # 图片能力与上方说明一致（查找键统一小写）。
 $fallbackModelIDs = @(
@@ -215,6 +214,27 @@ try {
     $apiKey = $apiKey.Trim()
     if ([string]::IsNullOrWhiteSpace($apiKey)) {
         throw 'API Key 不能为空。'
+    }
+
+    # 先拉站点配置：白名单模型 + 网关地址由管理员后台动态下发，失败保持内置兜底
+    Write-Host '正在读取站点配置...' -ForegroundColor DarkGray
+    try {
+        Enable-Tls12
+        $siteConfig = Invoke-RestMethod -UseBasicParsing -Method Get -Uri $setupConfigUrl -TimeoutSec 15
+        if ($null -ne $siteConfig -and $null -ne $siteConfig.data -and $null -ne $siteConfig.data.api) {
+            $remoteBaseUrl = ([string]$siteConfig.data.api.base_url).Trim()
+            $remoteModels = @($siteConfig.data.api.models)
+            if (-not [string]::IsNullOrWhiteSpace($remoteBaseUrl)) {
+                $setupApiBaseUrl = $remoteBaseUrl.TrimEnd('/')
+                $setupEndpoint = $setupApiBaseUrl + '/models'
+            }
+            if ($remoteModels.Count -gt 0) {
+                $fallbackModelIDs = $remoteModels
+                Write-Host ('站点配置：{0} 个展示模型，网关 {1}' -f $remoteModels.Count, $setupApiBaseUrl) -ForegroundColor DarkGray
+            }
+        }
+    } catch {
+        Write-Host '站点配置读取失败，使用内置默认清单。' -ForegroundColor DarkGray
     }
 
     Write-Host ''

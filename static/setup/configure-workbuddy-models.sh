@@ -18,7 +18,10 @@
 set -euo pipefail
 
 # ===================== 已按你的 new-api 渠道配置 =====================
+# 白名单模型与网关地址优先从站点配置接口动态获取（管理员后台「展示模型清单」
+# /「对外 API 地址」改了脚本自动跟随，无需发版）；拉取失败用内置兜底。
 API_BASE_URL="https://api.aihuobao.cn/v1"
+SETUP_CONFIG_URL="https://workbuddy.oneworker.cn/api/config"
 
 # 在线图片能力清单（WorkBuddy 官方，尽力拉取；失败不阻塞配置）
 CAPABILITIES_URL="https://workbuddy.oneworker.cn/setup/workbuddy-model-capabilities.txt"
@@ -130,6 +133,24 @@ chmod 600 "${FALLBACK_FILE}" 2>/dev/null || true
 printf 'header = "Authorization: Bearer %s"\n' "${API_KEY}" > "${CURL_CONFIG}"
 chmod 600 "${CURL_CONFIG}" 2>/dev/null || true
 
+# ---- 站点配置：白名单模型 + 网关地址（管理员后台动态下发，失败保持内置）----
+SITE_CONFIG_FILE="${TEMP_DIR}/site-config.json"
+printf '正在读取站点配置...\n'
+SITE_CONFIG_HTTP_STATUS=$(curl --silent --show-error --location \
+  --connect-timeout 5 --max-time 10 \
+  --output "$(winpath "${SITE_CONFIG_FILE}")" --write-out '%{http_code}' \
+  "${SETUP_CONFIG_URL}" 2>/dev/null) || SITE_CONFIG_HTTP_STATUS=""
+if [ "${SITE_CONFIG_HTTP_STATUS}" != "200" ] || ! grep -q '"api"' "${SITE_CONFIG_FILE}" 2>/dev/null; then
+  rm -f "${SITE_CONFIG_FILE}" 2>/dev/null || true
+  printf '站点配置读取失败，使用内置默认清单。\n'
+else
+  # bash 侧只解析 base_url（供随后拉取 /models 使用）；models 数组交给 Node 解析
+  REMOTE_BASE_URL=$(sed -n 's/.*"base_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${SITE_CONFIG_FILE}" | head -n 1)
+  if [ -n "${REMOTE_BASE_URL}" ]; then
+    API_BASE_URL="${REMOTE_BASE_URL%/}"
+  fi
+fi
+
 # ---- 拉取 /v1/models（new-api：token model_limits 白名单决定返回哪些模型）----
 printf '\n正在读取可用模型列表...\n'
 # 不区分失败类型：连接失败与 HTTP 非 200（401/403 等可能是 API Key 问题）一律降级到
@@ -237,6 +258,33 @@ function run(argv) {
   const capabilitiesPath = argv[4];
   const apiBaseURL = String(argv[5] || '').trim();
   const fallbackPath = argv[6];
+  const siteConfigPath = argv[7] || '';
+
+  // 站点配置（管理员后台「展示模型清单」/「对外 API 地址」）：白名单与网关地址
+  // 优先从这里取，拉不到/解析失败保持内置默认。
+  let allowedModelPrefixes = [
+    'gpt-4o', 'gpt-4o-mini', 'claude-sonnet-4', 'deepseek-chat', 'gemini-2.0-flash',
+  ];
+  let siteModels = [];
+  let effectiveBaseURL = apiBaseURL;
+  if (siteConfigPath) {
+    try {
+      const fs = require('fs');
+      const sc = JSON.parse(fs.readFileSync(siteConfigPath, 'utf8'));
+      const api = sc && sc.data && sc.data.api ? sc.data.api : null;
+      if (api) {
+        if (Array.isArray(api.models)) {
+          siteModels = api.models.map(function (m) { return String(m || '').trim(); })
+            .filter(function (m) { return m !== ''; });
+          if (siteModels.length > 0) {
+            allowedModelPrefixes = siteModels.map(function (m) { return m.toLowerCase(); });
+          }
+        }
+        const bu = String(api.base_url || '').trim();
+        if (bu !== '') { effectiveBaseURL = bu.replace(/\/+$/, ''); }
+      }
+    } catch (error) { /* 读取/解析失败保持内置 */ }
+  }
   const apiKey = readUTF8(keyPath).replace(/[\r\n]+$/, '');
 
   if (!apiKey) {
@@ -251,14 +299,7 @@ function run(argv) {
   const seenModelIDs = {};
   // 硬白名单（前缀匹配，大小写不敏感）：渠道模型 ID 常带版本后缀
   // （如 gpt-4o-2024-11-20 / claude-sonnet-4-20250514），以白名单项开头的
-  // 都保留原始 ID，其他（o3-mini 等）一律跳过。
-  const ALLOWED_MODEL_IDS = [
-    'gpt-4o',
-    'gpt-4o-mini',
-    'claude-sonnet-4',
-    'deepseek-chat',
-    'gemini-2.0-flash',
-  ];
+  // 都保留原始 ID，其他（o3-mini 等）一律跳过。白名单来自站点配置。
   function collectModelIDs(entries) {
     entries.forEach(function (entry) {
       const modelID = String((entry && entry.id) || '').trim();
@@ -267,8 +308,8 @@ function run(argv) {
         return;
       }
       let allowed = false;
-      for (let i = 0; i < ALLOWED_MODEL_IDS.length; i++) {
-        if (key.indexOf(ALLOWED_MODEL_IDS[i]) === 0) { allowed = true; break; }
+      for (let i = 0; i < allowedModelPrefixes.length; i++) {
+        if (key.indexOf(allowedModelPrefixes[i]) === 0) { allowed = true; break; }
       }
       if (!allowed) {
         return;
@@ -290,16 +331,22 @@ function run(argv) {
   }
 
   // HTTP 200 但空/无效列表（token 白名单与渠道可用模型无交集、代理返回 HTML 等）
-  // 与传输层失败一样只能拿到 0 个模型，这里降级到内置默认清单（sh 侧已把传输
+  // 与传输层失败一样只能拿到 0 个模型，这里降级：优先站点配置的展示清单
+  // （它就是白名单来源，天然通过过滤），再退内置默认清单（sh 侧已把传输
   // 失败的响应替换成内置 JSON，这一层兜「请求成功但数据为空」）。
   let usedFallback = false;
   if (modelIDs.length === 0) {
     usedFallback = true;
-    const fallback = JSON.parse(readUTF8(fallbackPath));
-    if (!fallback || !Array.isArray(fallback.data)) {
-      throw new Error('内置默认模型列表不可用');
+    if (siteModels.length > 0) {
+      collectModelIDs(siteModels.map(function (m) { return { id: m }; }));
     }
-    collectModelIDs(fallback.data);
+    if (modelIDs.length === 0) {
+      const fallback = JSON.parse(readUTF8(fallbackPath));
+      if (!fallback || !Array.isArray(fallback.data)) {
+        throw new Error('内置默认模型列表不可用');
+      }
+      collectModelIDs(fallback.data);
+    }
     if (modelIDs.length === 0) {
       throw new Error('内置默认模型列表为空');
     }
@@ -345,7 +392,7 @@ function run(argv) {
       id: modelID,
       name: modelID,
       vendor: 'Custom',
-      url: apiBaseURL,
+      url: effectiveBaseURL,
       apiKey: apiKey,
       supportsToolCall: supportsToolCall,
       supportsImages: supportsImages,
@@ -406,7 +453,7 @@ NODE_CAPABILITIES_FILE=$(winpath "${CAPABILITIES_FILE}")
 NODE_FALLBACK_FILE=$(winpath "${FALLBACK_FILE}")
 NODE_SCRIPT=$(winpath "${NODE_FILE}")
 
-if ! INSTALLED_MODELS=$(node "${NODE_SCRIPT}" "${NODE_CONFIG_FILE}" "${NODE_TEMP_CONFIG}" "${NODE_KEY_FILE}" "${NODE_SETUP_FILE}" "${NODE_CAPABILITIES_FILE}" "${API_BASE_URL}" "${NODE_FALLBACK_FILE}"); then
+if ! INSTALLED_MODELS=$(node "${NODE_SCRIPT}" "${NODE_CONFIG_FILE}" "${NODE_TEMP_CONFIG}" "${NODE_KEY_FILE}" "${NODE_SETUP_FILE}" "${NODE_CAPABILITIES_FILE}" "${API_BASE_URL}" "${NODE_FALLBACK_FILE}" "${SITE_CONFIG_FILE:-}"); then
   print_error "无法更新 ${CONFIG_FILE}。原配置没有被覆盖。"
   if [ -n "${BACKUP_FILE}" ]; then
     printf '备份文件：%s\n' "${BACKUP_FILE}" >&2
