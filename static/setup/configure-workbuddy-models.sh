@@ -249,13 +249,23 @@ function run(argv) {
   // /v1/models 返回 OpenAI 格式: { object: 'list', data: [ { id: '...', ... }, ... ] }
   const modelIDs = [];
   const seenModelIDs = {};
-  // 模型白名单由 new-api token 的 model_limits 控制：/v1/models 已只返回白名单模型，
-  // 这里只做去空 + 去重（大小写不敏感），不再二次过滤。
+  // 硬白名单：渠道/token 可能返回全部可用模型，本工具只配置官方支持的
+  // 这 5 个，其他一律跳过（不依赖 new-api token 的 model_limits 是否设置）。
+  const ALLOWED_MODEL_IDS = {
+    'gpt-4o': true,
+    'gpt-4o-mini': true,
+    'claude-sonnet-4': true,
+    'deepseek-chat': true,
+    'gemini-2.0-flash': true,
+  };
   function collectModelIDs(entries) {
     entries.forEach(function (entry) {
       const modelID = String((entry && entry.id) || '').trim();
       const key = modelID.toLowerCase();
       if (!modelID || seenModelIDs[key]) {
+        return;
+      }
+      if (!ALLOWED_MODEL_IDS[key]) {
         return;
       }
       modelIDs.push(modelID);

@@ -232,14 +232,17 @@ try {
             $fetchModelError = New-Object System.Exception ('配置服务返回了无效数据')
         } else {
             # /v1/models 返回 OpenAI 格式: { object: 'list', data: [ { id: '...', ... }, ... ] }
+            # 硬白名单：只保留官方支持的模型（与内置清单一致），渠道/token 返回的
+            # 其他模型一律不写入（不依赖 token 的 model_limits 是否设置）。
             $modelIDs = @(
                 $setupResponse.data |
                     ForEach-Object { ([string]$_.id).Trim() } |
                     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                    Where-Object { $fallbackModelIDs -ccontains $_ } |
                     Select-Object -Unique
             )
             if ($modelIDs.Count -eq 0) {
-                $fetchModelError = New-Object System.Exception ('在线模型列表为空（该 API Key 暂无可用模型）')
+                $fetchModelError = New-Object System.Exception ('在线模型列表为空（白名单外或该 API Key 暂无可用模型）')
             }
         }
     } catch {
