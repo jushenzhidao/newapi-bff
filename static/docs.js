@@ -217,9 +217,11 @@ const SECTION = {
   /* 模型能力表：对应「查看模型信息」。内联表格，长文本列省略号 + title 悬浮。 */
   model_table: (s) => {
     const rows = s.rows || [];
+    /* 能力标记：支持用 SVG 勾（P0-1 禁 emoji/字符图标，复用 app.js 全局 ICONS.check，
+     * app.js 先于本文件加载，全局词法作用域可直接引用）；不支持保留 —。 */
     const flag = (v) =>
-      (v === true || v === "✓" || v === 1)
-        ? '<span class="mt-yes">✓</span>'
+      (v === true || v === 1)
+        ? `<span class="mt-yes">${ICONS.check}</span>`
         : (v === false || v === "—" || v === "" || v == null)
           ? '<span class="mt-no">—</span>'
           : `<span class="mt-dyn">${esc(String(v))}</span>`;

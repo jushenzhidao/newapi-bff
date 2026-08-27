@@ -10,12 +10,17 @@ from app import config, docs_catalog
 
 # ==================== 档案层 ====================
 
-def test_六份档案全部可加载():
-    """档案语法错误的后果是产品从页面消失而不是报错，所以要逐个断言存在。"""
+def test_所有档案全部可加载():
+    """档案语法错误的后果是产品从页面消失而不是报错，所以要逐个断言存在。
+
+    新增 docs/products/*.yml 后在此补 id 即可（刻意显式列出而非动态，
+    防止档案被误删时测试静默变绿）。
+    """
     loaded = docs_catalog.all_products()
     assert set(loaded) == {
         "points", "codex", "deepseek-harness",
         "token-plan", "coding-plan", "agent-plan",
+        "client-config",
     }
 
 
@@ -25,13 +30,14 @@ def test_占位档案可见且标记待补充():
     真实内容补齐后应改掉 badge，这条断言会跟着失败，提醒同步更新。
     """
     index = {p["id"]: p for p in docs_catalog.index()}
-    assert len(index) == 6, "占位档案被过滤掉了，链路没跑通"
+    assert len(index) == len(docs_catalog.all_products()), \
+        f"有档案被索引过滤掉了：{set(docs_catalog.all_products()) - set(index)}"
     for pid in ["codex", "deepseek-harness", "token-plan", "coding-plan", "agent-plan"]:
         assert index[pid]["badge"] == "待补充"
 
 
 def test_索引不含正文():
-    """首屏不该把六份档案的正文全拉下来。"""
+    """首屏不该把档案列表的正文全拉下来。"""
     for item in docs_catalog.index():
         assert "sections" not in item
 
@@ -56,13 +62,10 @@ def test_档案变量插值已生效():
 def test_教程索引接口(client):
     r = client.get("/api/docs")
     assert r.status_code == 200
-    assert len(r.json()["data"]["products"]) == 6
+    assert len(r.json()["data"]["products"]) == len(docs_catalog.all_products())
 
 
-@pytest.mark.parametrize("pid", [
-    "points", "codex", "deepseek-harness",
-    "token-plan", "coding-plan", "agent-plan",
-])
+@pytest.mark.parametrize("pid", sorted(docs_catalog.all_products()))
 def test_每个产品详情都能打开(client, pid):
     r = client.get(f"/api/docs/{pid}")
     assert r.status_code == 200
@@ -138,7 +141,7 @@ def test_图标键名从appjs现场解析():
     assert len(keys) < 40, f"疑似吞掉了 ICONS 之后的代码：{sorted(keys)}"
 
 
-def test_六份档案图标键名全部合法():
+def test_全部档案图标键名合法():
     """写错键名只会静默回落成 book，页面看着正常但图标是错的。"""
     from app import main
 
