@@ -1,0 +1,89 @@
+# newapi-bff 容器编排面板 / 服务器直拉镜像版。
+#
+# 与仓库 docker-compose.yml（build 模式）的区别：
+#   - 不构建，直接引用 GHCR 镜像 ghcr.io/jushenzhidao/newapi-bff
+#   - 镜像版本用 BFF_IMAGE 指定（如 dev-a1b2c3d / master-9f8e7f6 / v1.0.0 / latest）
+#   - 私有镜像需先在宿主机登录：echo <PAT> | docker login ghcr.io -u jushenzhidao --password-stdin
+#
+# 其余安全/运行语义与生产 compose 完全一致，见原文件注释。
+
+services:
+  bff:
+    image: ghcr.io/jushenzhidao/newapi-bff:${BFF_IMAGE:?BFF_IMAGE 必须设置，如 dev-a1b2c3d 或 latest}
+    container_name: newapi-bff
+    restart: unless-stopped
+
+    # 只绑回环：生产 TLS 由宿主机 Nginx/Caddy 终止，防绕过反代的明文旁路。
+    ports:
+      - "127.0.0.1:${BFF_PORT:-8000}:8000"
+
+    environment:
+      # ---- 必填 ----
+      BFF_SECRET_KEY: ${BFF_SECRET_KEY:?BFF_SECRET_KEY 必须设置，用 openssl rand -hex 32 生成}
+      NEWAPI_BASE_URL: ${NEWAPI_BASE_URL:?NEWAPI_BASE_URL 必须设置，如 https://api.example.com}
+      NEWAPI_ADMIN_PAT: ${NEWAPI_ADMIN_PAT:?NEWAPI_ADMIN_PAT 必须设置，在 new-api「个人设置 → 系统访问令牌」生成}
+      NEWAPI_ADMIN_UID: ${NEWAPI_ADMIN_UID:?NEWAPI_ADMIN_UID 必须设置，即管理员账号的用户 ID}
+      NEWAPI_ADMIN_USERNAME: ${NEWAPI_ADMIN_USERNAME:?NEWAPI_ADMIN_USERNAME 必须设置，PAT 失效自愈通道}
+      NEWAPI_ADMIN_PASSWORD: ${NEWAPI_ADMIN_PASSWORD:?NEWAPI_ADMIN_PASSWORD 必须设置，PAT 失效自愈通道}
+
+      # ---- 运行模式（生产写死）----
+      BFF_MOCK_MODE: "0"
+      BFF_COOKIE_SECURE: "1"
+      BFF_COOKIE_SAMESITE: ${BFF_COOKIE_SAMESITE:-lax}
+
+      # ---- 积分与活动（运营策略，不想做活动显式设 0）----
+      BFF_POINTS_PER_CNY: ${BFF_POINTS_PER_CNY:-10000}
+      BFF_PROMO_SIGNUP_ENABLED: ${BFF_PROMO_SIGNUP_ENABLED:-1}
+      BFF_PROMO_SIGNUP_POINTS: ${BFF_PROMO_SIGNUP_POINTS:-20000}
+      BFF_PROMO_FIRST_TOPUP_ENABLED: ${BFF_PROMO_FIRST_TOPUP_ENABLED:-1}
+      BFF_PROMO_FIRST_TOPUP_RATE: ${BFF_PROMO_FIRST_TOPUP_RATE:-1.0}
+
+      # ---- 品牌 ----
+      BFF_BRAND_NAME: ${BFF_BRAND_NAME:-NexusAPI}
+      BFF_API_BASE_URL: ${BFF_API_BASE_URL:-}
+      BFF_BRAND_ICP: ${BFF_BRAND_ICP:-}
+      BFF_BRAND_CONTACT: ${BFF_BRAND_CONTACT:-}
+
+      # ---- 反代信任来源：反代在宿主机时填 docker 网桥网段（docker network inspect bridge 查看），不能填 * ----
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+
+      # ---- 可观测性（留空即关闭）----
+      LOGFIRE_TOKEN: ${LOGFIRE_TOKEN:-}
+      LOGFIRE_ENVIRONMENT: ${LOGFIRE_ENVIRONMENT:-}
+
+      # ---- 可写数据目录（必须指到卷，根文件系统只读）----
+      BFF_DATA_DIR: /data
+
+    volumes:
+      - bff-data:/data
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+volumes:
+  bff-data:
