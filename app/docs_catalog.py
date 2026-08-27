@@ -46,6 +46,9 @@ KNOWN_SECTION_TYPES = frozenset({
     "table",         # 静态表格（额度规则等）
     "faq",           # 折叠问答
     "callout",       # 提示 / 警告条
+    "fields",        # 配置字段表单（label/value 列表，API Key 可用 __USER_KEY__ 占位）
+    "model_table",   # 模型能力表（id/描述/场景/上下文/工具调用/视觉/推理）
+    "video",         # 教程视频（src + 可选 poster/title）
 })
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
@@ -112,6 +115,20 @@ def _validate(pid: str, raw: Any) -> dict:
                 f"{pid}: sections[{i}] 的 type={stype!r} 不支持，"
                 f"可选：{', '.join(sorted(KNOWN_SECTION_TYPES))}"
             )
+        # 新增段类型的结构校验：字段缺失在加载期就报错，
+        # 而不是把空段渲染成空白卡片（运营配错时最怕静默消失）。
+        if stype == "fields":
+            items = sec.get("items")
+            if not isinstance(items, list) or not items:
+                raise CatalogError(f"{pid}: sections[{i}] fields.items 必须是非空列表")
+        elif stype == "model_table":
+            rows = sec.get("rows")
+            if not isinstance(rows, list) or not rows:
+                raise CatalogError(f"{pid}: sections[{i}] model_table.rows 必须是非空列表")
+        elif stype == "video":
+            if not sec.get("src"):
+                raise CatalogError(f"{pid}: sections[{i}] video.src 必填")
+
         clean_sections.append(dict(sec))
 
     return {

@@ -676,3 +676,122 @@ tbody tr:hover { background: #fafbfd; }
   .cfg-row { flex-direction: column; gap: 8px; }
   .cfg-ctl { flex: 1 1 auto; width: 100%; }
 }
+
+/* ================= 教程页新增段类型（从 stash 改造回填） ================= */
+.doc-img {
+  max-width: 100%; border-radius: 10px; border: 1px solid var(--border);
+  display: block; margin: 12px 0; background: var(--surface);
+}
+.doc-video-wrap { margin: 12px 0; }
+.doc-video {
+  display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain;
+  background: #000; border-radius: 10px; border: 1px solid var(--border);
+}
+.doc-video-cap { color: var(--text-3); font-size: 12px; margin-top: 6px; text-align: center; }
+
+.doc-fields { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.doc-field {
+  display: flex; align-items: center; gap: 14px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px;
+}
+.doc-field-label { flex: 0 0 92px; font-size: 13px; color: var(--text-3); font-weight: 600; }
+.doc-field-value {
+  flex: 1; min-width: 0; font-family: var(--mono); font-size: 13px;
+  color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 模型能力表：固定列宽，长文本列省略号 + title 悬浮 */
+.mt-table { table-layout: fixed; width: 100%; }
+.mt-table th:nth-child(1) { width: 140px; }
+.mt-table th:nth-child(2), .mt-table th:nth-child(3) { width: 80px; }
+.mt-table th:nth-child(4), .mt-table th:nth-child(5), .mt-table th:nth-child(6) { width: 62px; }
+.mt-table .mt-c { text-align: center; white-space: nowrap; }
+.mt-yes { color: var(--primary); font-weight: 700; }
+.mt-no { color: var(--text-3); }
+.mt-dyn { color: #b45309; font-weight: 500; font-size: 12px; }
+.mt-table .mt-text {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text-2); cursor: help;
+}
+
+/* ================= 教程页：补齐缺失的样式（索引卡片 / 提示 / 正文 / 表格 / Tab） ================= */
+.doc-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px; margin-top: 18px;
+}
+.doc-card {
+  display: flex; align-items: center; gap: 14px; text-decoration: none;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 18px; color: var(--text);
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+.doc-card:hover { border-color: var(--primary); box-shadow: 0 2px 10px rgba(16,24,40,.06); transform: translateY(-2px); }
+.doc-card-ico {
+  width: 42px; height: 42px; border-radius: 10px; flex: 0 0 42px;
+  background: var(--primary-soft); color: var(--primary);
+  display: flex; align-items: center; justify-content: center;
+}
+.doc-card-ico svg { width: 22px; height: 22px; }
+.doc-card-main { flex: 1; min-width: 0; }
+.doc-card-main b { display: block; font-size: 14.5px; margin-bottom: 3px; }
+.doc-card-main p {
+  margin: 0; color: var(--text-3); font-size: 12.5px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.doc-card-arrow { flex: 0 0 auto; color: var(--text-3); font-size: 18px; transition: color .15s; }
+.doc-card:hover .doc-card-arrow { color: var(--primary); }
+.doc-badge {
+  display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px;
+  background: var(--primary-soft); color: var(--primary); font-size: 11px; font-weight: 600;
+}
+
+.doc-callout {
+  border: 1px solid var(--border); border-left: 3px solid var(--primary);
+  background: var(--surface); border-radius: 10px; padding: 14px 16px; margin: 4px 0;
+}
+.doc-callout b { display: block; margin-bottom: 4px; font-size: 14px; }
+.doc-callout div { color: var(--text-2); font-size: 13.5px; line-height: 1.6; }
+.doc-callout.info { border-left-color: var(--primary); }
+.doc-callout.warn { border-left-color: #f59e0b; background: #fffbeb; }
+.doc-callout.warn b { color: #b45309; }
+.doc-callout.warn div { color: #8a6d2b; }
+
+.doc-prose { font-size: 14px; line-height: 1.75; color: var(--text-2); }
+.doc-prose p { margin: 0 0 10px; }
+.doc-prose h1, .doc-prose h2, .doc-prose h3 { color: var(--text); margin: 16px 0 8px; line-height: 1.35; }
+.doc-prose ul, .doc-prose ol { padding-left: 20px; margin: 0 0 10px; }
+.doc-prose li { margin-bottom: 4px; }
+.doc-prose code {
+  background: var(--primary-soft); color: var(--primary); padding: 1px 6px; border-radius: 5px;
+  font-family: var(--mono); font-size: 12.5px;
+}
+.doc-prose a { color: var(--primary); text-decoration: none; }
+.doc-prose a:hover { text-decoration: underline; }
+.doc-prose img { max-width: 100%; border-radius: 8px; }
+.doc-prose strong { color: var(--text); }
+
+.doc-table-wrap {
+  overflow-x: auto; margin: 10px 0; border: 1px solid var(--border); border-radius: 10px;
+}
+.doc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.doc-table th, .doc-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+.doc-table th { background: var(--primary-soft); color: var(--text-2); font-weight: 600; white-space: nowrap; }
+.doc-table tr:last-child td { border-bottom: none; }
+.doc-table-title { font-size: 13.5px; font-weight: 600; color: var(--text); margin: 14px 0 6px; }
+.doc-gr { color: var(--primary); font-weight: 700; }
+.doc-note { margin-top: 10px; color: var(--text-3); font-size: 12px; }
+
+.doc-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 14px; }
+.doc-tab {
+  padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-2);
+  font-family: inherit; transition: all .15s;
+}
+.doc-tab:hover { border-color: var(--primary); color: var(--primary); }
+.doc-tab.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.doc-tab-panel { margin-top: 4px; }
+
+.doc-crumb { color: var(--text-3); font-size: 13px; margin-bottom: 6px; }
+.doc-crumb a { color: var(--text-2); text-decoration: none; }
+.doc-crumb a:hover { color: var(--primary); }
+.doc-crumb span { margin: 0 6px; }

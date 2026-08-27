@@ -19,6 +19,7 @@ function docMd(src) {
   let inList = false;
   const inline = (t) =>
     esc(t)
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img class="doc-img" alt="$1" src="$2">')
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
@@ -70,6 +71,30 @@ async function docCopy(id, btn) {
   }
 }
 
+/* 教程视频：原生 <video>，零额外依赖。 */
+function docVideo(v) {
+  if (!v || !v.src) return "";
+  const poster = v.poster ? ` poster="${esc(v.poster)}"` : "";
+  const title = v.title ? `<div class="doc-video-cap">${esc(v.title)}</div>` : "";
+  return `<div class="doc-video-wrap">` +
+    `<video class="doc-video" controls preload="metadata" src="${esc(v.src)}"${poster}></video>${title}</div>`;
+}
+
+/* 把 fields 段里标记为 __USER_KEY__ 的占位，替换为登录用户的默认 API Key。
+ * 失败（未登录/无权限）则回退提示文本，不阻塞页面渲染。 */
+async function injectUserKeys() {
+  const nodes = document.querySelectorAll("[data-user-key]");
+  if (!nodes.length) return;
+  let key = "";
+  try {
+    const r = await api("/api/token");
+    const list = (r && r.data) || [];
+    const def = list.find((t) => t.status === 1) || list[0];
+    if (def && def.key) key = def.key;
+  } catch (_) { /* 忽略，走回退 */ }
+  nodes.forEach((n) => { n.textContent = key || "sk-你的Key"; });
+}
+
 /* ---------- section 渲染注册表 ---------- */
 
 const SECTION = {
@@ -97,6 +122,7 @@ const SECTION = {
             <b>${esc(it.name)}</b>
             ${it.body ? docMd(it.body) : ""}
             ${it.code ? docCode(it.code, it.lang) : ""}
+            ${it.image ? `<img class="doc-img" alt="${esc(it.name || "")}" src="${esc(it.image)}">` : ""}
           </div>
         </div>`).join("")}
     </div>`,
@@ -128,6 +154,7 @@ const SECTION = {
         ${tabs.map((t, i) => `
           <div class="doc-tab-panel" data-g="${gid}" data-i="${i}"
                style="${i === 0 ? "" : "display:none"}">
+            ${t.video ? docVideo(t.video) : ""}
             ${t.body ? docMd(t.body) : ""}
             ${t.code ? docCode(t.code, t.lang) : ""}
           </div>`).join("")}
@@ -135,6 +162,64 @@ const SECTION = {
   },
 
   pricing_table: (s) => renderPricing(s.data || {}),
+
+  /* 配置字段表单：label + value 列表。value 为 "__USER_KEY__" 时，
+   * 渲染后由 injectUserKeys 异步填入登录用户的默认 Key。 */
+  fields: (s) => `
+    <div class="card">
+      ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
+      <div class="doc-fields">
+        ${(s.items || []).map((it) => `
+          <div class="doc-field">
+            <span class="doc-field-label">${esc(it.label || "")}</span>
+            <span class="doc-field-value"${it.value === "__USER_KEY__" ? ' data-user-key="1"' : ""}>${esc(it.value === "__USER_KEY__" ? "你的 API Key" : (it.value || ""))}</span>
+          </div>`).join("")}
+      </div>
+    </div>`,
+
+  /* 模型能力表：对应「查看模型信息」。内联表格，长文本列省略号 + title 悬浮。 */
+  model_table: (s) => {
+    const rows = s.rows || [];
+    const flag = (v) =>
+      (v === true || v === "✓" || v === 1)
+        ? '<span class="mt-yes">✓</span>'
+        : (v === false || v === "—" || v === "" || v == null)
+          ? '<span class="mt-no">—</span>'
+          : `<span class="mt-dyn">${esc(String(v))}</span>`;
+    return `
+      <div class="card">
+        ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
+        <div class="doc-table-wrap">
+          <table class="doc-table mt-table">
+            <thead><tr>
+              <th>模型</th><th>最大输入</th><th>最大输出</th>
+              <th>工具调用</th><th>视觉</th><th>推理</th>
+              <th>说明</th><th>适合场景</th>
+            </tr></thead>
+            <tbody>
+              ${rows.map((m) => `
+                <tr>
+                  <td class="doc-model"><b>${esc(m.id)}</b></td>
+                  <td>${esc(m.maxInput || "—")}</td>
+                  <td>${esc(m.maxOutput || "—")}</td>
+                  <td class="mt-c">${flag(m.toolCall)}</td>
+                  <td class="mt-c">${flag(m.vision)}</td>
+                  <td class="mt-c">${flag(m.reasoning)}</td>
+                  <td class="mt-text" title="${esc(m.description || "")}">${esc(m.description || "—")}</td>
+                  <td class="mt-text" title="${esc(m.scenario || "")}">${esc(m.scenario || "—")}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  },
+
+  /* 教程视频（独立段类型，也可嵌在 platform_tabs 的 tab 内） */
+  video: (s) => `
+    <div class="card">
+      ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
+      ${docVideo(s)}
+    </div>`,
 };
 
 function docTab(gid, idx, btn) {
@@ -289,4 +374,5 @@ async function renderDocProduct(id) {
       return `<div id="sec-${i}">${fn(s)}</div>`;
     }).join("")}
   `);
+  injectUserKeys();
 }
