@@ -47,11 +47,14 @@ function docMd(src) {
 let _cbSeq = 0;
 function docCode(code, lang) {
   // 一行布局：bash 标签 + 命令（占满中间）+ 复制按钮，垂直居中、外框包边。
+  // __SITE_ORIGIN__ 占位符替换为当前访问域名（本地 8000 / 线上各显示各自的），
+  // 复制按钮取 DOM 文本，拿到的已是替换后的完整地址。
+  const resolved = esc(code).replaceAll("__SITE_ORIGIN__", window.location.origin);
   const id = `dc${++_cbSeq}`;
   return `
     <div class="doc-code">
       <span class="doc-code-lang">${esc(lang || "bash")}</span>
-      <pre id="${id}"><code>${esc(code)}</code></pre>
+      <pre id="${id}"><code>${resolved}</code></pre>
       <button class="doc-copy" onclick="docCopy('${id}',this)">复制</button>
     </div>`;
 }
