@@ -73,6 +73,7 @@ sections:
                 fields:
                   - label: "接口地址"
                     value: "https://api.aihuobao.cn/v1"
+                    copyable: true
                   - label: "API Key"
                     value: "__USER_KEY__"
                     copyable: true
