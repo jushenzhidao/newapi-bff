@@ -249,15 +249,16 @@ function run(argv) {
   // /v1/models 返回 OpenAI 格式: { object: 'list', data: [ { id: '...', ... }, ... ] }
   const modelIDs = [];
   const seenModelIDs = {};
-  // 硬白名单：渠道/token 可能返回全部可用模型，本工具只配置官方支持的
-  // 这 5 个，其他一律跳过（不依赖 new-api token 的 model_limits 是否设置）。
-  const ALLOWED_MODEL_IDS = {
-    'gpt-4o': true,
-    'gpt-4o-mini': true,
-    'claude-sonnet-4': true,
-    'deepseek-chat': true,
-    'gemini-2.0-flash': true,
-  };
+  // 硬白名单（前缀匹配，大小写不敏感）：渠道模型 ID 常带版本后缀
+  // （如 gpt-4o-2024-11-20 / claude-sonnet-4-20250514），以白名单项开头的
+  // 都保留原始 ID，其他（o3-mini 等）一律跳过。
+  const ALLOWED_MODEL_IDS = [
+    'gpt-4o',
+    'gpt-4o-mini',
+    'claude-sonnet-4',
+    'deepseek-chat',
+    'gemini-2.0-flash',
+  ];
   function collectModelIDs(entries) {
     entries.forEach(function (entry) {
       const modelID = String((entry && entry.id) || '').trim();
@@ -265,7 +266,11 @@ function run(argv) {
       if (!modelID || seenModelIDs[key]) {
         return;
       }
-      if (!ALLOWED_MODEL_IDS[key]) {
+      let allowed = false;
+      for (let i = 0; i < ALLOWED_MODEL_IDS.length; i++) {
+        if (key.indexOf(ALLOWED_MODEL_IDS[i]) === 0) { allowed = true; break; }
+      }
+      if (!allowed) {
         return;
       }
       modelIDs.push(modelID);

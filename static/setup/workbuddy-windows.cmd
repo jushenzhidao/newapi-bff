@@ -232,13 +232,21 @@ try {
             $fetchModelError = New-Object System.Exception ('配置服务返回了无效数据')
         } else {
             # /v1/models 返回 OpenAI 格式: { object: 'list', data: [ { id: '...', ... }, ... ] }
-            # 硬白名单：只保留官方支持的模型（与内置清单一致），渠道/token 返回的
-            # 其他模型一律不写入（不依赖 token 的 model_limits 是否设置）。
+            # 硬白名单（前缀匹配，大小写不敏感）：渠道模型 ID 常带版本后缀
+            # （如 gpt-4o-2024-11-20 / claude-sonnet-4-20250514），以白名单项
+            # 开头的都保留原始 ID，其他（o3-mini 等）一律不写入。
             $modelIDs = @(
                 $setupResponse.data |
                     ForEach-Object { ([string]$_.id).Trim() } |
                     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-                    Where-Object { $fallbackModelIDs -ccontains $_ } |
+                    Where-Object {
+                        $id = $_.ToLower()
+                        $matched = $false
+                        foreach ($allow in $fallbackModelIDs) {
+                            if ($id.StartsWith($allow.ToLower())) { $matched = $true; break }
+                        }
+                        $matched
+                    } |
                     Select-Object -Unique
             )
             if ($modelIDs.Count -eq 0) {
