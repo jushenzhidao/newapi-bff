@@ -759,7 +759,8 @@ tbody tr:hover { background: #fafbfd; }
 .mt-table th:nth-child(2), .mt-table th:nth-child(3) { width: 80px; }
 .mt-table th:nth-child(4), .mt-table th:nth-child(5), .mt-table th:nth-child(6) { width: 62px; }
 .mt-table .mt-c { text-align: center; white-space: nowrap; }
-.mt-yes { color: var(--primary); font-weight: 700; }
+.mt-yes { color: var(--primary); font-weight: 700; display: inline-flex; vertical-align: middle; }
+.mt-yes svg { display: block; }
 .mt-no { color: var(--text-3); }
 .mt-dyn { color: #b45309; font-weight: 500; font-size: 12px; }
 .mt-table .mt-text {
