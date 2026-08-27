@@ -84,6 +84,8 @@ function docVideo(v) {
  * 全部禁用时退回全列表里 created_time 最大者；无 created_time 字段时按列表顺序兜底。
  * 真实环境下 /api/token 列表返回的是掩码 Key（如 QSZO**********Nf48），无法用于客户端配置，
  * 需再调一次 /api/token/{id}/key 取明文（该接口有频控，仅在确为掩码时补调一次）。
+ * new-api 存储的 key 是不带 sk- 前缀的裸串，实际调用要用 sk-<key>，注入前统一补齐
+ * （mock 模式生成的 key 已带前缀，此处幂等不重复加）。
  * 失败（未登录/无权限/取明文失败）则回退提示文本，不阻塞页面渲染。 */
 async function injectUserKeys() {
   const nodes = document.querySelectorAll("[data-user-key]");
@@ -105,6 +107,8 @@ async function injectUserKeys() {
           if (kp && kp.data && kp.data.key) key = kp.data.key;
         } catch (_) { /* 取明文失败，保留掩码提示文本 */ }
       }
+      // 补 sk- 前缀（new-api 裸串 → 实际调用格式），已带前缀则不动。
+      if (key.slice(0, 3) !== "sk-") key = "sk-" + key;
     }
   } catch (_) { /* 忽略，走回退 */ }
   nodes.forEach((n) => { n.textContent = key || "sk-你的Key"; });
