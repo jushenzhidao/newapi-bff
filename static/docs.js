@@ -79,9 +79,10 @@ function docVideo(v) {
     `<video class="doc-video" controls preload="metadata" src="${esc(v.src)}"${poster}></video>${title}</div>`;
 }
 
-/* 把 fields 段里标记为 __USER_KEY__ 的占位，替换为登录用户的默认 API Key。
- * 取「默认」规则：优先用 status===1（启用）的 Key，否则取列表第一条。
- * 真实环境下 /api/token 列表返回的是掩码 Key（如 tTPn****6JJ4），无法用于客户端配置，
+/* 把 fields 段里标记为 __USER_KEY__ 的占位，替换为登录用户最新的 API Key。
+ * 取「最新」规则：status===1（启用）的 Key 里取 created_time 最大者；
+ * 全部禁用时退回全列表里 created_time 最大者；无 created_time 字段时按列表顺序兜底。
+ * 真实环境下 /api/token 列表返回的是掩码 Key（如 QSZO**********Nf48），无法用于客户端配置，
  * 需再调一次 /api/token/{id}/key 取明文（该接口有频控，仅在确为掩码时补调一次）。
  * 失败（未登录/无权限/取明文失败）则回退提示文本，不阻塞页面渲染。 */
 async function injectUserKeys() {
@@ -91,7 +92,10 @@ async function injectUserKeys() {
   try {
     const r = await api("/api/token");
     const list = (r && r.data) || [];
-    const def = list.find((t) => t.status === 1) || list[0];
+    const byNewest = (a, b) => (b.created_time || 0) - (a.created_time || 0);
+    const active = list.filter((t) => t.status === 1);
+    const pool = (active.length ? active : list).slice().sort(byNewest);
+    const def = pool[0];
     if (def && def.key) {
       key = def.key;
       // 列表是掩码串（含 *）时补调明文接口，拿到真正可复制配置的 Key。
