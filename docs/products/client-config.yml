@@ -25,8 +25,8 @@ sections:
             title: ""
             items:
               - name: "运行配置命令"
-                body: "打开「终端」应用程序，粘贴下面这段命令并回车执行。脚本已内置到项目 static/setup/ 目录，本地开发也可直接 bash static/setup/configure-workbuddy-models-macos.sh 运行："
-                code: "curl -fsSL https://workerbuddy.vip/setup/configure-workbuddy-models-macos.sh | bash"
+                body: "打开「终端」应用程序，粘贴下面这段命令并回车执行。脚本已内置到项目 static/setup/ 目录，本地开发也可直接 bash static/setup/workbuddy-mac.sh 运行："
+                code: "curl -fsSL https://workbuddy.oneworker.cn/setup/workbuddy-mac.sh | bash"
                 lang: bash
               - name: "粘贴 API Key"
                 body: "复制下面的 API Key，脚本运行时会提示你粘贴："
@@ -47,9 +47,9 @@ sections:
             title: ""
             items:
               - name: "运行配置命令"
-                body: "**以管理员身份**打开 PowerShell，粘贴下面这段命令并回车执行："
-                code: "irm https://workerbuddy.vip/setup/workbuddy-win.ps1 | iex"
-                lang: powershell
+                body: "打开 **Git Bash**（安装 Git for Windows 时自带），粘贴下面这段命令并回车执行。脚本已内置到项目 static/setup/ 目录，本地开发也可直接 bash static/setup/configure-workbuddy-models.sh 运行："
+                code: "curl -fsSL https://workbuddy.oneworker.cn/setup/configure-workbuddy-models.sh | bash"
+                lang: bash
               - name: "粘贴 API Key"
                 body: "复制下面的 API Key，脚本运行时会提示你粘贴："
                 fields:
@@ -74,7 +74,7 @@ sections:
                 body: "把下面 3 项信息填到对应字段后保存："
                 fields:
                   - label: "接口地址"
-                    value: "https://api.oneapis.cn"
+                    value: "https://api.aihuobao.cn/v1"
                   - label: "API Key"
                     value: "__USER_KEY__"
                     copyable: true

@@ -80,7 +80,10 @@ function docVideo(v) {
 }
 
 /* 把 fields 段里标记为 __USER_KEY__ 的占位，替换为登录用户的默认 API Key。
- * 失败（未登录/无权限）则回退提示文本，不阻塞页面渲染。 */
+ * 取「默认」规则：优先用 status===1（启用）的 Key，否则取列表第一条。
+ * 真实环境下 /api/token 列表返回的是掩码 Key（如 tTPn****6JJ4），无法用于客户端配置，
+ * 需再调一次 /api/token/{id}/key 取明文（该接口有频控，仅在确为掩码时补调一次）。
+ * 失败（未登录/无权限/取明文失败）则回退提示文本，不阻塞页面渲染。 */
 async function injectUserKeys() {
   const nodes = document.querySelectorAll("[data-user-key]");
   if (!nodes.length) return;
@@ -89,7 +92,16 @@ async function injectUserKeys() {
     const r = await api("/api/token");
     const list = (r && r.data) || [];
     const def = list.find((t) => t.status === 1) || list[0];
-    if (def && def.key) key = def.key;
+    if (def && def.key) {
+      key = def.key;
+      // 列表是掩码串（含 *）时补调明文接口，拿到真正可复制配置的 Key。
+      if (key.indexOf("*") !== -1 && def.id != null) {
+        try {
+          const kp = await api(`/api/token/${def.id}/key`, { method: "POST" });
+          if (kp && kp.data && kp.data.key) key = kp.data.key;
+        } catch (_) { /* 取明文失败，保留掩码提示文本 */ }
+      }
+    }
   } catch (_) { /* 忽略，走回退 */ }
   nodes.forEach((n) => { n.textContent = key || "sk-你的Key"; });
 }
@@ -390,7 +402,7 @@ async function renderDocProduct(id) {
       <div class="page-title">教程未找到</div>
       <div class="doc-callout warn">
         <b>${esc(e.message || "该产品教程不存在")}</b>
-        <div>可能已下线或链接有误。<a href="#/docs">返回教程中心</a></div>
+        <div>可能已下线或链接有误。<a href="#/docs/client-config">返回使用教程</a></div>
       </div>`);
     return;
   }
@@ -402,7 +414,7 @@ async function renderDocProduct(id) {
     .filter(({ s }) => s.title && s.type !== "callout");
 
   renderLayout("/docs", `
-    <div class="doc-crumb"><a href="#/docs">使用教程</a> <span>/</span> ${esc(d.title)}</div>
+    <div class="doc-crumb"><a href="#/docs/client-config">使用教程</a> <span>/</span> ${esc(d.title)}</div>
     <div class="page-title">${esc(d.title)}</div>
     ${d.summary ? `<div class="page-sub">${esc(d.summary)}</div>` : ""}
     ${toc.length > 1 ? `<div class="doc-toc">${

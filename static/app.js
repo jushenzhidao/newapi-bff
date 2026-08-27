@@ -231,6 +231,12 @@ async function router() {
   // 带参数的路径：routes 是精确匹配表，#/docs/points 这类需要单独识别，
   // 否则会静默落到 renderLanding 兜底，表现为「点进教程回到首页」。
   const docId = path.startsWith("/docs/") ? path.slice("/docs/".length) : "";
+  // /docs 是教程列表（占位卡多），用户真正想看的就是客户端配置这一篇。
+  // 收到 /docs 直接重定向到默认教程页，跳过中间路由。
+  if (path === "/docs") {
+    location.replace("#/docs/client-config");
+    return;
+  }
   const base = docId ? "/docs" : path;
   const view = docId
     ? () => renderDocProduct(decodeURIComponent(docId))
@@ -274,7 +280,7 @@ function renderLanding() {
         <div class="nav-links">
           <a href="#features">能力</a>
           <a href="#pricing">价格</a>
-          <a href="#/docs" onclick="location.hash='#/docs'">文档</a>
+          <a href="#/docs/client-config" onclick="location.hash='#/docs/client-config'">文档</a>
           <a href="#/login"><button class="btn-ghost-dark" style="padding:8px 18px">登录</button></a>
           <a href="#/register"><button class="btn-glow" style="padding:8px 18px">免费开始</button></a>
         </div>
@@ -375,7 +381,7 @@ function renderLanding() {
         </div>
       </section>
 
-      <footer class="lp-foot">${esc(BRAND())} · 统一接入多家大模型 · <a href="#/docs" style="color:#7a86a8">接入文档</a>${SITE.brand.icp ? ` · <span>${esc(SITE.brand.icp)}</span>` : ""}${SITE.brand.contact ? ` · <span>${esc(SITE.brand.contact)}</span>` : ""}</footer>
+      <footer class="lp-foot">${esc(BRAND())} · 统一接入多家大模型 · <a href="#/docs/client-config" style="color:#7a86a8">接入文档</a>${SITE.brand.icp ? ` · <span>${esc(SITE.brand.icp)}</span>` : ""}${SITE.brand.contact ? ` · <span>${esc(SITE.brand.contact)}</span>` : ""}</footer>
     </div>
   </div>`;
 }
@@ -581,7 +587,7 @@ function renderLayout(active, contentHtml) {
   const nav = [
     ["概览", [["dashboard", "/dashboard", "仪表盘"], ["chart", "/analytics", "用量看板"]]],
     ["资产", [["topup", "/topup", "充值中心"], ["key", "/keys", "API Key"], ["log", "/logs", "调用日志"]]],
-    ["帮助", [["book", "/docs", "使用教程"]]],
+    ["帮助", [["book", "/docs/client-config", "使用教程"]]],
   ];
   // /docs 是公开页，未登录也会走到这里，此时 currentUser 仍是 null。
   // 用局部空对象兜住，避免访客访问教程页时属性读取抛异常导致整页白屏。
@@ -692,7 +698,7 @@ async function renderDashboard() {
           <div class="qi-icon" style="background:var(--warn-soft);color:var(--warn)">${ICONS.chart}</div>
           <b>用量看板</b><span>趋势与模型分布</span>
         </a>
-        <a class="quick-item" href="#/docs">
+        <a class="quick-item" href="#/docs/client-config">
           <div class="qi-icon" style="background:var(--danger-soft);color:var(--danger)">${ICONS.book}</div>
           <b>使用教程</b><span>一分钟快速接入</span>
         </a>

@@ -25,7 +25,7 @@ $ErrorActionPreference = "Stop"
 
 # ---------------- 默认配置 ----------------
 $script:DefaultApiBase = "https://ai.modelzoo.tech/v1"
-$script:CapabilitiesUrl = "https://workerbuddy.vip/setup/workbuddy-model-capabilities.txt"
+$script:CapabilitiesUrl = "https://workbuddy.oneworker.cn/setup/workbuddy-model-capabilities.txt"
 # 内置默认模型列表（在线拉取失败时的兜底）
 $script:FallbackModelIDs = @("auto","glm-5.2","glm-5.3","glm-5-turbo","deepseek-v4-flash","deepseek-v4-pro","minimax-m3","kimi-k2.7-code","step-3.7-flash")
 # 内置图片能力（查找键统一小写）
