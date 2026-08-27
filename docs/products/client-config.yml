@@ -47,9 +47,9 @@ sections:
             title: ""
             items:
               - name: "下载配置工具"
-                body: "右键下面的链接 → 链接另存为...，保存到本地任意目录（也可直接双击下载）：\n\n[**下载 workbuddy-windows.cmd**](https://workbuddy.oneworker.cn/setup/workbuddy-windows.cmd)。"
+                body: "[**下载 workbuddy-windows.cmd**](https://workbuddy.oneworker.cn/setup/workbuddy-windows.cmd)"
               - name: "运行并粘贴 Key"
-                body: "**双击运行**保存的 `workbuddy-windows.cmd`，按提示粘贴下面这段 Key："
+                body: "双击运行保存的 `workbuddy-windows.cmd`，按提示粘贴下面这段 Key："
                 fields:
                   - label: "API Key"
                     value: "__USER_KEY__"
