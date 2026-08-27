@@ -1,4 +1,5 @@
-:root {
+<!doctype html><html><head><meta charset="utf-8"><title>Windows tab 预览</title>
+<style>:root {
   --bg: #f5f7fb;
   --surface: #ffffff;
   --border: #e5e9f2;
@@ -848,3 +849,15 @@ tbody tr:hover { background: #fafbfd; }
 .doc-crumb a { color: var(--text-2); text-decoration: none; }
 .doc-crumb a:hover { color: var(--primary); }
 .doc-crumb span { margin: 0 6px; }
+
+.preview-tabs { display:flex; gap:6px; margin:24px 0 0; background:#f4f6fb; padding:6px; border-radius:10px; width:fit-content }
+.preview-tabs span { padding:8px 18px; border-radius:6px; font-size:14px; color:#5e6b8c; font-weight:600 }
+.preview-tabs span.active { background:#22c55e; color:#fff }
+body { padding:32px; max-width:920px; margin:0 auto; background:#fff }
+.card { background:#fff; border:1px solid #e7e9f3; border-radius:14px; padding:24px 28px; margin-top:14px; box-shadow:0 1px 4px rgba(20,28,60,.04) }
+</style></head><body>
+<div class="preview-tabs">
+  <span>macOS 一键配置</span><span class="active">Windows 一键配置</span><span>手动配置</span>
+</div>
+<div class="card"><div class="doc-step"><div class="step-no">1</div><div class="step-body"><b>下载配置工具</b><p>右键下面的链接 → <b>链接另存为...</b>，保存到本地任意目录（也可直接双击下载）：</p><p><a href="https://workbuddy.oneworker.cn/setup/workbuddy-windows.cmd"><b>下载 workbuddy-windows.cmd</b></a></p><p>本地开发调试可拷贝项目里的 <code>static/setup/workbuddy-windows.cmd</code> 运行。</p></div></div><div class="doc-step"><div class="step-no">2</div><div class="step-body"><b>运行并粘贴 Key</b><p><b>双击运行</b>保存的 <code>workbuddy-windows.cmd</code>，按提示粘贴下面这段 Key：</p><div class="doc-fields"><div class="doc-field has-copy"><span class="doc-field-label">API Key</span><span class="doc-field-value">sk-Vz5YeQGi.jAbGcuK8xm5zzjEE0w4H4XBjtn4LJWwuv2YcjFDe</span><button class="doc-copy" type="button">复制</button></div></div></div></div><div class="doc-step"><div class="step-no">3</div><div class="step-body"><b>开始使用</b><p>脚本完成后打开 WorkBuddy，新建任务，在对话框右下角选择自定义模型，开始对话。</p><img class="doc-img" alt="开始使用" src="/static/images/workbuddy-select-model.png"></div></div></div>
+</body></html>

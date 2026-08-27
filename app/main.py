@@ -1111,6 +1111,33 @@ async def index():
     return HTMLResponse(html, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
+# ==================== 客户端配置脚本直读（/setup/<file>） ====================
+# 教程页一键命令（curl https://<域名>/setup/workbuddy-mac.sh | bash）与
+# 「下载配置工具」链接都指向 /setup/<file>。static 目录挂在 /static 前缀下，
+# 这里补一条不带前缀的路由，部署后无需 nginx 额外映射 /setup -> static/setup：
+#   - 白名单取 setup 目录实际文件名（新增脚本零改动）
+#   - Content-Disposition: attachment 保证浏览器点击 .cmd/.sh 是下载而非打开
+#     （curl | bash 不受该头影响，两种用法共用同一路径）
+_SETUP_DIR = STATIC_DIR / "setup"
+
+
+@app.get("/setup/{filename}")
+async def setup_file(filename: str):
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    path = _SETUP_DIR / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return Response(
+        content=path.read_bytes(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
 # ==================== 支付回跳落地页 ====================
 # 易支付的 return_url 由 new-api 用 ServerAddress + "/usage-logs" 拼出
 # （controller/topup.go: paymentReturnPath("/usage-logs")），BFF 无法在下单时改写它。

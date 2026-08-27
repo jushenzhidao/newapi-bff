@@ -46,18 +46,16 @@ sections:
           - type: steps
             title: ""
             items:
-              - name: "运行配置命令"
-                body: "打开 **Git Bash**（安装 Git for Windows 时自带），粘贴下面这段命令并回车执行。脚本已内置到项目 static/setup/ 目录，本地开发也可直接 bash static/setup/configure-workbuddy-models.sh 运行："
-                code: "curl -fsSL https://workbuddy.oneworker.cn/setup/configure-workbuddy-models.sh | bash"
-                lang: bash
-              - name: "粘贴 API Key"
-                body: "复制下面的 API Key，脚本运行时会提示你粘贴："
+              - name: "下载配置工具"
+                body: "右键下面的链接 → 链接另存为...，保存到本地任意目录（也可直接双击下载）：\n\n[**下载 workbuddy-windows.cmd**](https://workbuddy.oneworker.cn/setup/workbuddy-windows.cmd)。"
+              - name: "运行并粘贴 Key"
+                body: "**双击运行**保存的 `workbuddy-windows.cmd`，按提示粘贴下面这段 Key："
                 fields:
                   - label: "API Key"
                     value: "__USER_KEY__"
                     copyable: true
               - name: "开始使用"
-                body: "脚本会在 `%USERPROFILE%\\.workbuddy\\models.json` 写入自定义模型配置（自动备份原配置）。完成后打开 WorkBuddy，新建任务，在对话框右下角选择自定义模型，开始对话。"
+                body: "脚本完成后打开 WorkBuddy，新建任务，在对话框右下角选择自定义模型，开始对话。"
                 image: "/static/images/workbuddy-select-model.png"
       - name: "手动配置"
         sections:
@@ -68,7 +66,7 @@ sections:
                 body: "进入「设置 → 模型 / 自定义模型」。"
                 image: "/static/images/workbuddy-manual-1-open.png"
               - name: "添加模型"
-                body: "点击「添加模型」，提供商选择「**其他（自定义 / Custom）**」。"
+                body: "点击「添加模型」，提供商选择「其他（自定义 / Custom）」。"
                 image: "/static/images/workbuddy-manual-2-provider.png"
               - name: "填入配置并保存"
                 body: "把下面 3 项信息填到对应字段后保存："
