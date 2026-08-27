@@ -1,0 +1,9 @@
+# WorkBuddy 模型图片输入能力清单
+# 格式：模型ID|true/false（支持图片输入=true）。# 开头为注释。
+# 查找键统一小写；脚本按前缀匹配不到时默认关闭图片输入。
+# 说明：gpt-4o / gpt-4o-mini / claude-sonnet-4 / gemini-2.0-flash 支持图片输入；
+#       deepseek-chat 纯文本；glm / deepseek-v4 / doubao / MiniMax 系列按需补充。
+gpt-4o|true
+gpt-4o-mini|true
+claude-sonnet-4|true
+gemini-2.0-flash|true
