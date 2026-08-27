@@ -1,146 +1,83 @@
-# 客户端配置教程（从 stash 的 tab-tutorial 改造回填，适配现档案架构）
-# 内容来源：static/docs-catalog.json 的「客户端配置教程」
-# 架构映射：
-#   tab-tutorial(macOS/Windows/手动配置) → platform_tabs + steps + fields + model_table
-#   step.image / video                → steps item.image / platform_tabs tab.video
-#   模型弹框                          → model_table 段类型（内联表格）
-#   ${USER_KEY}                      → __USER_KEY__（前端异步注入登录用户默认 Key）
+# 客户端配置教程（极简版：单 platform_tabs + 3 tab，每个 tab 嵌视频 + 步骤，步骤内嵌字段/代码/截图）
+# 架构对照：
+#   screenshot 截图 2 → 单卡 + 顶部 3 tab + 视频 + 编号步骤（含 API Key 复制按钮）
+#   tab.sections   → 按段类型递归渲染（platform_tabs 的 tab 支持嵌套任意段类型）
+#   step.fields    → 步骤内嵌字段列表；step.fields[i].copyable = true 时带「复制」按钮
+#   __USER_KEY__   → 前端异步注入登录用户默认 Key（复制按钮读 DOM 文本，能取到替换后的真实 Key）
 title: "客户端配置教程"
 summary: "按你的系统选择，一键完成 WorkBuddy 客户端模型配置"
 icon: "key"
 order: 10
 draft: false
 sections:
-  - type: callout
-    level: info
-    title: "两种接入方式"
-    body: |
-      提供 **一键脚本**（macOS / Windows，自动写入模型配置）与 **手动配置**（自定义或排查用）两种方式，按你的系统选择。
-
+  # 用 bare: true 跳过 platform_tabs 外层 .card，整体只一层 card 包裹由 renderDocProduct 提供
   - type: platform_tabs
-    title: "一键配置"
+    bare: true
+    title: "配置教程"
     tabs:
-      - name: "macOS"
-        lang: bash
-        video:
-          src: "/static/videos/mac-setup.mp4"
-          poster: "/static/images/poster.jpg"
-          title: "macOS 配置教程"
-        code: |
-          curl -fsSL https://workerbuddy.vip/setup/workbuddy-mac.sh | bash
-        body: |
-          打开「终端」应用，粘贴并回车执行上面的命令。安装完成后打开客户端，新建任务，在对话框右下角选择自定义模型即可开始对话。
-          ![开始使用](/static/images/workbuddy-select-model.png)
-      - name: "Windows (PowerShell)"
-        lang: powershell
-        video:
-          src: "/static/videos/win-setup.mp4"
-          poster: "/static/images/poster.jpg"
-          title: "Windows 配置教程"
-        code: |
-          irm https://workerbuddy.vip/setup/workbuddy-win.ps1 | iex
-        body: |
-          **以管理员身份**打开 PowerShell，粘贴并回车执行上面的命令。脚本会在 `%USERPROFILE%\.workbuddy\models.json` 写入自定义模型配置（自动备份原配置）。
-          ![开始使用](/static/images/workbuddy-select-model.png)
-
-  - type: steps
-    title: "手动配置"
-    items:
-      - name: "打开 WorkBuddy 模型设置"
-        body: |
-          进入「设置 → 模型 / 自定义模型」。
-        image: "/static/images/workbuddy-manual-1-open.png"
-      - name: "添加模型"
-        body: |
-          点击「添加模型」，提供商选择「其他（自定义 / Custom）」。
-        image: "/static/images/workbuddy-manual-2-provider.png"
-      - name: "填入配置并保存"
-        body: |
-          将以下信息填入对应字段后保存（API Key 为登录用户的默认令牌）：
-        image: "/static/images/workbuddy-manual-3-fill.png"
-
-  - type: fields
-    title: "填入的配置字段"
-    items:
-      - label: "接口地址"
-        value: "{{api_base}}"
-      - label: "API Key"
-        value: "__USER_KEY__"
-      - label: "模型名称"
-        value: "{{default_model}}"
-
-  - type: model_table
-    title: "支持的模型"
-    rows:
-      - id: auto
-        description: "智能动态路由，由请求自动择优分配到下方模型"
-        scenario: "不想手动选模型 / 希望自动匹配最优模型"
-        maxInput: "动态"
-        maxOutput: "动态"
-        toolCall: "动态"
-        vision: true
-        reasoning: true
-      - id: glm-5.3
-        description: "智谱最新旗舰，1M 真实可用长上下文"
-        scenario: "大型项目级编程、超长文档与 Agent 长轨迹"
-        maxInput: "1000K"
-        maxOutput: "128K"
-        toolCall: true
-        vision: false
-        reasoning: true
-      - id: glm-5.2
-        description: "面向长程任务的基座模型，744B 总参"
-        scenario: "长程编程、复杂工程任务"
-        maxInput: "256K"
-        maxOutput: "128K"
-        toolCall: true
-        vision: false
-        reasoning: true
-      - id: deepseek-v4-flash
-        description: "轻量低延迟版，13B 激活，高性价比"
-        scenario: "实时/高频调用、成本敏感批量任务"
-        maxInput: "1000K"
-        maxOutput: "384K"
-        toolCall: true
-        vision: false
-        reasoning: true
-      - id: deepseek-v4-pro
-        description: "1.6T 旗舰，Agentic 编程能力最强"
-        scenario: "复杂推理、Agentic Coding"
-        maxInput: "1000K"
-        maxOutput: "384K"
-        toolCall: true
-        vision: false
-        reasoning: true
-      - id: minimax-m3
-        description: "1M 上下文 + 原生多模态，稀疏注意力"
-        scenario: "编程/Agent、图文与视频理解"
-        maxInput: "1000K"
-        maxOutput: "131K"
-        toolCall: true
-        vision: true
-        reasoning: false
-      - id: kimi-k2.7-code
-        description: "月之暗面旗舰，推理与编程见长"
-        scenario: "复杂推理、长上下文编程"
-        maxInput: "256K"
-        maxOutput: "64K"
-        toolCall: true
-        vision: false
-        reasoning: true
-      - id: step-3.7-flash
-        description: "198B/11B MoE，多模态高速推理"
-        scenario: "Agent、代码、图文与视频理解"
-        maxInput: "256K"
-        maxOutput: "64K"
-        toolCall: true
-        vision: true
-        reasoning: false
-      - id: glm-5-turbo
-        description: "GLM-5 基座，OpenClaw 龙虾场景优化"
-        scenario: "命令驱动 Agent、定时/持续性任务"
-        maxInput: "200K"
-        maxOutput: "128K"
-        toolCall: true
-        vision: false
-        reasoning: true
+      - name: "macOS 一键配置"
+        sections:
+          - type: video
+            src: "/static/videos/mac-setup.mp4"
+            poster: "/static/images/poster.jpg"
+            title: "macOS 配置教程"
+          - type: steps
+            title: ""
+            items:
+              - name: "运行配置命令"
+                body: "打开「终端」应用程序，粘贴下面这段命令并回车执行："
+                code: "curl -fsSL https://workerbuddy.vip/setup/workbuddy-mac.sh | bash"
+                lang: bash
+              - name: "粘贴 API Key"
+                body: "复制下面的 API Key，脚本运行时会提示你粘贴："
+                fields:
+                  - label: "API Key"
+                    value: "__USER_KEY__"
+                    copyable: true
+              - name: "开始使用"
+                body: "安装完成后打开 WorkBuddy，新建任务，在对话框右下角选择自定义模型，即可开始对话。"
+                image: "/static/images/workbuddy-select-model.png"
+      - name: "Windows 一键配置"
+        sections:
+          - type: video
+            src: "/static/videos/win-setup.mp4"
+            poster: "/static/images/poster.jpg"
+            title: "Windows 配置教程"
+          - type: steps
+            title: ""
+            items:
+              - name: "运行配置命令"
+                body: "**以管理员身份**打开 PowerShell，粘贴下面这段命令并回车执行："
+                code: "irm https://workerbuddy.vip/setup/workbuddy-win.ps1 | iex"
+                lang: powershell
+              - name: "粘贴 API Key"
+                body: "复制下面的 API Key，脚本运行时会提示你粘贴："
+                fields:
+                  - label: "API Key"
+                    value: "__USER_KEY__"
+                    copyable: true
+              - name: "开始使用"
+                body: "脚本会在 `%USERPROFILE%\\.workbuddy\\models.json` 写入自定义模型配置（自动备份原配置）。完成后打开 WorkBuddy，新建任务，在对话框右下角选择自定义模型，开始对话。"
+                image: "/static/images/workbuddy-select-model.png"
+      - name: "手动配置"
+        sections:
+          - type: steps
+            title: ""
+            items:
+              - name: "打开 WorkBuddy 模型设置"
+                body: "进入「设置 → 模型 / 自定义模型」。"
+                image: "/static/images/workbuddy-manual-1-open.png"
+              - name: "添加模型"
+                body: "点击「添加模型」，提供商选择「**其他（自定义 / Custom）**」。"
+                image: "/static/images/workbuddy-manual-2-provider.png"
+              - name: "填入配置并保存"
+                body: "把下面 3 项信息填到对应字段后保存："
+                fields:
+                  - label: "接口地址"
+                    value: "https://api.oneapis.cn"
+                  - label: "API Key"
+                    value: "__USER_KEY__"
+                    copyable: true
+                  - label: "模型名称"
+                    value: "auto"
+                image: "/static/images/workbuddy-manual-3-fill.png"

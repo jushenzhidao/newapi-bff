@@ -122,6 +122,15 @@ const SECTION = {
             <b>${esc(it.name)}</b>
             ${it.body ? docMd(it.body) : ""}
             ${it.code ? docCode(it.code, it.lang) : ""}
+            ${Array.isArray(it.fields) && it.fields.length ? `
+              <div class="doc-fields">
+                ${it.fields.map((f) => `
+                  <div class="doc-field${f.copyable ? " has-copy" : ""}">
+                    <span class="doc-field-label">${esc(f.label || "")}</span>
+                    <span class="doc-field-value"${f.value === "__USER_KEY__" ? ' data-user-key="1"' : ""}>${esc(f.value === "__USER_KEY__" ? "你的 API Key" : (f.value || ""))}</span>
+                    ${f.copyable ? `<button class="doc-copy" type="button" onclick="copyDocField(this)">复制</button>` : ""}
+                  </div>`).join("")}
+              </div>` : ""}
             ${it.image ? `<img class="doc-img" alt="${esc(it.name || "")}" src="${esc(it.image)}">` : ""}
           </div>
         </div>`).join("")}
@@ -138,41 +147,58 @@ const SECTION = {
     </div>`,
 
   /* 多平台安装：Tab 切换。默认选中第一个平台，而不是猜用户的操作系统 ——
-   * 猜错了用户会照着错误的平台命令去执行。 */
+   * 猜错了用户会照着错误的平台命令去执行。
+   * tab.sections 是嵌套段数组（按 SECTION[type] 递归渲染），旧的 tab.body/code 兼容保留。 */
   platform_tabs: (s) => {
     const tabs = s.tabs || [];
     if (!tabs.length) return "";
     const gid = `pt${++_cbSeq}`;
-    return `
-      <div class="card">
-        ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
-        <div class="doc-tabs" id="${gid}">
-          ${tabs.map((t, i) => `
-            <button class="doc-tab${i === 0 ? " active" : ""}"
-                    onclick="docTab('${gid}',${i},this)">${esc(t.name)}</button>`).join("")}
-        </div>
+    const renderTabSections = (t) => {
+      if (Array.isArray(t.sections) && t.sections.length) {
+        return t.sections.map((sec) => {
+          if (!sec || !sec.type) return "";
+          const fn = SECTION[sec.type];
+          if (!fn) { console.warn("docs: no renderer for", sec.type); return ""; }
+          try { return fn(sec); }
+          catch (e) { console.error("docs section render error:", sec.type, e); return ""; }
+        }).join("");
+      }
+      /* 向后兼容旧格式：tab.video/body/code 三个并列 */
+      return [
+        t.video ? docVideo(t.video) : "",
+        t.body ? docMd(t.body) : "",
+        t.code ? docCode(t.code, t.lang) : "",
+      ].join("");
+    };
+    const inner = `
+      ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
+      <div class="doc-tabs" id="${gid}">
         ${tabs.map((t, i) => `
-          <div class="doc-tab-panel" data-g="${gid}" data-i="${i}"
-               style="${i === 0 ? "" : "display:none"}">
-            ${t.video ? docVideo(t.video) : ""}
-            ${t.body ? docMd(t.body) : ""}
-            ${t.code ? docCode(t.code, t.lang) : ""}
-          </div>`).join("")}
-      </div>`;
+          <button class="doc-tab${i === 0 ? " active" : ""}"
+                  onclick="docTab('${gid}',${i},this)">${esc(t.name)}</button>`).join("")}
+      </div>
+      ${tabs.map((t, i) => `
+        <div class="doc-tab-panel" data-g="${gid}" data-i="${i}"
+             style="${i === 0 ? "" : "display:none"}">
+          ${renderTabSections(t)}
+        </div>`).join("")}`;
+    return s.bare ? inner : `<div class="card">${inner}</div>`;
   },
 
   pricing_table: (s) => renderPricing(s.data || {}),
 
   /* 配置字段表单：label + value 列表。value 为 "__USER_KEY__" 时，
-   * 渲染后由 injectUserKeys 异步填入登录用户的默认 Key。 */
+   * 渲染后由 injectUserKeys 异步填入登录用户的默认 Key。
+   * items[i].copyable = true 时在该 item 后追加「复制」按钮。 */
   fields: (s) => `
     <div class="card">
       ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
       <div class="doc-fields">
         ${(s.items || []).map((it) => `
-          <div class="doc-field">
+          <div class="doc-field${it.copyable ? " has-copy" : ""}">
             <span class="doc-field-label">${esc(it.label || "")}</span>
             <span class="doc-field-value"${it.value === "__USER_KEY__" ? ' data-user-key="1"' : ""}>${esc(it.value === "__USER_KEY__" ? "你的 API Key" : (it.value || ""))}</span>
+            ${it.copyable ? `<button class="doc-copy" type="button" onclick="copyDocField(this)">复制</button>` : ""}
           </div>`).join("")}
       </div>
     </div>`,
@@ -228,6 +254,23 @@ function docTab(gid, idx, btn) {
   document.querySelectorAll(`.doc-tab-panel[data-g="${gid}"]`).forEach((p) => {
     p.style.display = String(p.dataset.i) === String(idx) ? "" : "none";
   });
+}
+
+/* 复制字段值：取同 doc-field 内的 doc-field-value 文本（含 __USER_KEY__ 异步替换后的真实 Key）。
+ * 不依赖外部注入顺序：injectUserKeys 通过 DOM textContent 替换，复制时直接读 textContent 就拿到已替换值。 */
+function copyDocField(btn) {
+  const valEl = btn.closest(".doc-field")?.querySelector(".doc-field-value");
+  const text = valEl ? (valEl.textContent || "").trim() : "";
+  if (!navigator.clipboard || !window.isSecureContext) {
+    /* localhost 非 https：Clipboard API 在某些浏览器不可用，fallback 给提示 */
+    btn.textContent = "请手动复制";
+    setTimeout(() => { btn.textContent = "复制"; }, 1500);
+    return;
+  }
+  navigator.clipboard.writeText(text).then(
+    () => { const orig = btn.textContent; btn.textContent = "已复制"; setTimeout(() => { btn.textContent = orig; }, 1200); },
+    () => { const orig = btn.textContent; btn.textContent = "复制失败"; setTimeout(() => { btn.textContent = orig; }, 1500); }
+  );
 }
 
 /* ---------- 积分消耗系数表 ---------- */
