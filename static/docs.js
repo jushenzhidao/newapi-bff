@@ -46,14 +46,13 @@ function docMd(src) {
  * 否则代码里的引号会把 HTML 属性截断。 */
 let _cbSeq = 0;
 function docCode(code, lang) {
+  // 一行布局：bash 标签 + 命令（占满中间）+ 复制按钮，垂直居中、外框包边。
   const id = `dc${++_cbSeq}`;
   return `
     <div class="doc-code">
-      <div class="doc-code-bar">
-        <span class="doc-code-lang">${esc(lang || "bash")}</span>
-        <button class="doc-copy" onclick="docCopy('${id}',this)">复制</button>
-      </div>
+      <span class="doc-code-lang">${esc(lang || "bash")}</span>
       <pre id="${id}"><code>${esc(code)}</code></pre>
+      <button class="doc-copy" onclick="docCopy('${id}',this)">复制</button>
     </div>`;
 }
 
