@@ -67,8 +67,6 @@ logger = logging.getLogger("bff.redeem_code")
 # 允许用户从卡片上带着横杠抄进来。可通过 BFF_REDEEM_CODE_PATTERN 覆盖。
 _CODE_RE = re.compile(config.REDEEM_CODE_PATTERN)
 
-USERNAME_PREFIX = "rc_"
-
 
 def normalize(code: str) -> str:
     """统一兑换码写法：去空白、去分隔符、转小写。
@@ -95,23 +93,59 @@ def _hmac(msg: str) -> str:
 _PWD_LEN = 20
 
 
+# 兑换码用户名取码的前 18 位（32 位 hex 码 → 前 18 位，碰撞空间 16^18）。
+USERNAME_LEN = 18
+
+
 def derive_account(code: str) -> tuple[str, str]:
     """兑换码 → (username, password)，纯函数、无状态、可重现。
 
-    用 HMAC 而非明文散列，避免拿到用户名就能反推兑换码：
-    没有 SECRET_KEY 就算不出 username 和 code 的对应关系。
+    username = 兑换码（归一化后）的前 18 位：直接可读、便于对账；
+    碰撞空间 16^18 ≈ 4.7e21，常规码量下前 18 位唯一。
+    若与既有用户名撞车（另一张码共享前 18 位，或被正常注册占用），
+    login_or_create 的建号路径会报 Duplicate 而不是登进别人账号 —— 不会串号。
+
+    password 仍用 HMAC 派生：用户名（码前缀）是明文可读的，密码另加盐，
+    确保拿到用户名也推不出密码。
     """
     norm = normalize(code)
-    username = USERNAME_PREFIX + _hmac(norm)[:16]
-    # 密码另加盐，确保即使 username 泄露（它会出现在管理后台用户列表里）
-    # 也推不出密码。
+    username = norm[:USERNAME_LEN]
     password = _hmac(norm + "|pwd")[:_PWD_LEN]
     return username, password
 
 
-def is_redeem_account(username: str) -> bool:
-    """判断是否为兑换码派生的影子账号（前端据此提示"绑定账号"）。"""
-    return bool(username) and username.startswith(USERNAME_PREFIX) and len(username) == len(USERNAME_PREFIX) + 16
+# ==================== 「兑换码账号」登记 ====================
+# username 不再带 rc_ 前缀后，无法从用户名判定是否兑换码账号 ——
+# 改为 BFF 登记表：兑换码登录成功时记下 uid。文件丢失的后果仅仅是
+# 绑定横幅重现、用户重设一次密码，无资损，可接受。
+
+_UIDS_FILE = os.path.join(config.DATA_DIR, "redeem-uids.json")
+
+
+def mark_uid(uid: int, username: str) -> None:
+    """登记该 uid 来自兑换码登录（登录成功即记）。"""
+    data: dict = {}
+    try:
+        with open(_UIDS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    import time
+    data[str(uid)] = {"username": username, "at": int(time.time())}
+    d = os.path.dirname(_UIDS_FILE)
+    os.makedirs(d, exist_ok=True)
+    with open(_UIDS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, sort_keys=True)
+
+
+def is_redeem_uid(uid: int) -> bool:
+    try:
+        with open(_UIDS_FILE, "r", encoding="utf-8") as f:
+            return str(uid) in json.load(f)
+    except (OSError, ValueError):
+        return False
 
 
 def mask(code: str) -> str:
@@ -131,6 +165,15 @@ async def login_or_create(code: str, client_ip: str | None = None) -> dict:
     """
     raw = (code or "").strip()
     username, password = derive_account(raw)
+    info = await _login_or_create_inner(raw, username, password, client_ip)
+    # 登记兑换码 uid：username 无 rc_ 前缀后，这是 /user/self 判定
+    # 「兑换码账号」（绑定横幅）的唯一依据
+    mark_uid(info["uid"], info["username"])
+    return info
+
+
+async def _login_or_create_inner(raw: str, username: str, password: str,
+                                 client_ip: str | None = None) -> dict:
 
     if config.MOCK_MODE:
         return _mock_login(raw, username, password)

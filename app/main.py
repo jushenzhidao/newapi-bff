@@ -259,33 +259,29 @@ async def bind_account(body: BindBody, response: Response,
     """兑换码账号设置用户名密码，便于以后不带码登录。
 
     两种路径：
-      - username 留空 / 等于当前 rc_ 名 → 保持卡号名不变，仅设置密码
-        （rc_ 派生密码被覆盖，原兑换码同样不再能登录；uid 记入「已设密码」登记）
-      - username 为新名（非 rc_ 开头）→ 改名 + 改密（经典路径）
+      - username 留空 / 等于当前卡号名（码前 18 位）→ 保持用户名不变，仅设置密码
+        （派生密码被覆盖，原兑换码同样不再能登录；uid 记入「已设密码」登记）
+      - username 为新名 → 改名 + 改密（经典路径）
     绑定后 uid 不变，余额/Key/日志全部保留。
     """
     username = body.username.strip() or session["username"]
     if not re.match(r"^[a-zA-Z0-9_]{2,20}$", username):
         return fail("用户名需为 2-20 位字母、数字或下划线")
-    if username != session["username"] and username.startswith(redeem_code.USERNAME_PREFIX):
-        # 改成 rc_ 开头的**其他**名字 = 占用别的兑换码将来会派生的账号名，
-        # 属于抢注攻击；保持自己当前 rc_ 名（仅设密码）不受此限
-        return fail(f"用户名不能以 {redeem_code.USERNAME_PREFIX} 开头")
     if not 8 <= len(body.password) <= MAX_PASSWORD_LEN:
         return fail(f"密码需为 8-{MAX_PASSWORD_LEN} 位")
-    if not redeem_code.is_redeem_account(session["username"]):
+    if not redeem_code.is_redeem_uid(session["uid"]):
         return fail("当前账号已是正式账号，无需绑定")
     # 统一走管理员接口 PUT /api/user/（BFF 管理员 token 代改）：
     # 用户态 PUT /api/user/self 要求 original_password（旧密码），而兑换码
     # 用户的旧密码是派生密码、BFF 无状态设计不存码，拿不到 —— 管理员代改
     # 是唯一不需要 original_password 的路径。安全性由三层保证：
     #   ① require_session：只有本人会话能触发
-    #   ② is_redeem_account：只对兑换码影子账号生效
-    #   ③ username 锁定为当前 rc_ 名（防抢注见上），用户无法借此动别人账号
+    #   ② is_redeem_uid：只对兑换码账号生效
+    #   ③ username 锁定为当前码前缀名，用户无法借此动别人账号
     # 管理员 token 仅在服务端使用，不下发前端。
     await redeem_code.bind_account(session["uid"], username, body.password)
     if username == session["username"]:
-        # 保持 rc_ 名仅设密码：结构判定（is_redeem_account）不会再变，
+        # 保持用户名仅设密码：结构判定不会再变，
         # 靠这份登记告诉 /user/self 「绑定提示可以收起来了」
         redeem_code.mark_password_set(session["uid"])
     # 改账密后旧 PAT 是否仍有效不做假设，直接用新账密重登换一份新的，
@@ -344,9 +340,10 @@ async def register(body: RegisterBody, request: Request, response: Response):
         return fail("用户名需为 2-20 位字母、数字或下划线")
     if not 8 <= len(body.password) <= MAX_PASSWORD_LEN:
         return fail(f"密码需为 8-{MAX_PASSWORD_LEN} 位")
-    if username.startswith(redeem_code.USERNAME_PREFIX):
-        # 保留前缀：否则可抢注别的兑换码将来会派生出的账号名
-        return fail(f"用户名不能以 {redeem_code.USERNAME_PREFIX} 开头")
+    if re.fullmatch(r"[0-9a-f]{18}", username):
+        # 18 位纯 hex 是兑换码用户名的形态（码前 18 位）。放行的话正常注册
+        # 会抢占某张真实兑换码的用户名，导致该码登录时建号撞名、永久无法使用
+        return fail("该用户名不可用，请换一个")
     # 验证码格式只做宽松兜底（非空、无空白、长度合理）：真正的裁决在上游 ——
     # new-api 发的码可能是字母数字混合，BFF 写死 6 位纯数字会把有效码误拦在门外
     _verify_code = body.verification_code.strip()
@@ -403,16 +400,15 @@ async def logout(response: Response):
 def _self_payload(uid: int, username: str, email: str, quota: int,
                   used_quota: int, request_count: int,
                   session: dict | None = None) -> dict:
-    is_rc = redeem_code.is_redeem_account(username)
+    is_rc = redeem_code.is_redeem_uid(uid)
     # 影子建号（注册/兑换码）没有真实邮箱，上游会补一个 <username>@example.com 占位。
-    # 把它显示给用户既无意义，还会泄露内部派生的 rc_xxx 用户名 —— 一律隐去。
+    # 把它显示给用户既无意义，还会泄露内部派生的用户名 —— 一律隐去。
     email = (email or "").strip()
     if email.endswith("@example.com") or email.startswith("rc_"):
         email = ""
     return {
         "id": uid, "username": username,
-        # 兑换码账号的用户名是一串 hex，直接显示既难看也无意义，
-        # 给个友好名（带短后缀便于用户区分多个码开的账号）
+        # 前端已改为直接显示 username，display_name 仅作兼容保留
         "display_name": f"卡号用户 {username[-6:]}" if is_rc else username,
         "email": email or "-",
         "points": P(quota), "used_points": P(used_quota),
@@ -421,8 +417,8 @@ def _self_payload(uid: int, username: str, email: str, quota: int,
         "unit": config.POINTS_UNIT_NAME,
         "first_topup_available": (not promo.first_topup_used(uid)) and
                                  config.PROMO_FIRST_TOPUP_ENABLED,
-        # 兑换码影子账号：前端据此提示「绑定账号」，避免用户丢码即丢余额
-        "is_redeem_account": (redeem_code.is_redeem_account(username)
+        # 兑换码账号（按 uid 登记）：前端据此提示「绑定账号」，避免丢码即丢余额
+        "is_redeem_account": (is_rc
                               and not redeem_code.password_set(uid)),
         # 仅用于前端决定是否显示管理入口。真正的鉴权在 require_admin，
         # 前端把这个字段改成 true 也调不通任何 /api/admin/* 接口。
