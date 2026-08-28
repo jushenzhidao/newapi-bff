@@ -293,7 +293,7 @@ try {
     $apiBaseUrl = $setupApiBaseUrl
     $supportsToolCall = $true
     $supportsReasoning = $true
-    $useCustomProtocol = $true
+    $useCustomProtocol = $false
     $maxInputTokens = 200000
     $maxOutputTokens = 65536
 

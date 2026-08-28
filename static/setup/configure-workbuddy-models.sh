@@ -355,7 +355,7 @@ function run(argv) {
 
   const supportsToolCall = true;
   const supportsReasoning = true;
-  const useCustomProtocol = true;
+  const useCustomProtocol = false;
   const maxInputTokens = 200000;
   const maxOutputTokens = 65536;
   const imageCapabilities = readImageCapabilities(capabilitiesPath);
