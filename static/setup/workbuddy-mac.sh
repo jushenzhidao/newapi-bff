@@ -20,11 +20,11 @@ set -euo pipefail
 # ===================== 已按你的 new-api 渠道配置 =====================
 # 白名单模型与网关地址优先从站点配置接口动态获取（管理员后台「展示模型清单」
 # /「对外 API 地址」改了脚本自动跟随，无需发版）；拉取失败用下方内置兜底。
-API_BASE_URL="https://newapi-bff.oneapis.cn/v1"
-SETUP_CONFIG_URL="https://workbuddy.oneapis.cn/api/config"
+API_BASE_URL="__API_BASE_URL__"
+SETUP_CONFIG_URL="__BFF_ORIGIN__/api/config"
 
 # 在线图片能力清单（WorkBuddy 官方，尽力拉取；失败不阻塞配置）
-CAPABILITIES_URL="https://workbuddy.oneapis.cn/setup/workbuddy-model-capabilities.txt"
+CAPABILITIES_URL="__BFF_ORIGIN__/setup/workbuddy-model-capabilities.txt"
 
 # 本地补充图片能力：new-api 渠道中支持「图片输入」的模型，一行一个，查找键统一小写。
 # 在线清单拉取成功时 = 官方清单 + 本地补充（本地覆盖同名键）；

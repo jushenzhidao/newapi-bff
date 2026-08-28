@@ -1146,14 +1146,40 @@ async def index():
 _SETUP_DIR = STATIC_DIR / "setup"
 
 
+def _site_origin(request: Request) -> str:
+    """当前用户访问 BFF 的实际 origin（含协议）。
+
+    容器前通常有反向代理（Ingress / nginx），此时 request.url 是容器内的
+    http://app:8000，而用户看到的是 https://workbuddy.oneapis.cn —— 所以优先
+    取 X-Forwarded-*（Host 才是用户实际输入的域名，Proto 决定 http/https）。
+    两个头都缺时回退 starlette 的 base_url（裸跑场景）。
+    """
+    host = (request.headers.get("x-forwarded-host")
+            or request.headers.get("host") or "").strip()
+    proto = (request.headers.get("x-forwarded-proto", "")
+             .split(",")[0].strip() or request.url.scheme)
+    if host:
+        return f"{proto}://{host}".rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
 @app.get("/setup/{filename}")
-async def setup_file(filename: str):
+async def setup_file(filename: str, request: Request):
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=404, detail="文件不存在")
     path = _SETUP_DIR / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
-    body = path.read_bytes()
+    # 脚本里的域名占位符在下发时按当前访问域名/后台配置替换：同一份代码部署到
+    # 测试环境（aihuobao）与生产（oneapis）都自动适配，不必为换环境改代码。
+    #   __BFF_ORIGIN__    → 用户访问 BFF 的 origin（脚本下载源，也从这里拉
+    #                       /api/config 与能力清单）
+    #   __API_BASE_URL__  → 后台「对外 API 地址」（new-api 网关，环境相关）
+    # 占位符未替换（旧镜像/直接打开模板文件）时脚本会走内置兜底清单，不会崩。
+    text = (path.read_text(encoding="utf-8")
+            .replace("__BFF_ORIGIN__", _site_origin(request))
+            .replace("__API_BASE_URL__", str(config.API_BASE_URL)))
+    body = text.encode("utf-8")
     # Windows 批处理（.cmd/.bat）必须 CRLF 换行：LF-only 会被 cmd.exe 误解析，
     # 表现为双击闪退。git 仓库按 LF 存储、Linux 镜像里也是 LF，这里在下发时
     # 统一规范化为 CRLF（不依赖 git 配置，任何构建/运行环境都正确）。

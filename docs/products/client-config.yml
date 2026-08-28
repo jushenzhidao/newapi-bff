@@ -76,7 +76,7 @@ sections:
                 body: "把下面 3 项信息填到对应字段后保存"
                 fields:
                   - label: "接口地址"
-                    value: "https://workbuddy.oneapis.cn/v1"
+                    value: "{{api_base}}"
                     copyable: true
                   - label: "API Key"
                     value: "__USER_KEY__"

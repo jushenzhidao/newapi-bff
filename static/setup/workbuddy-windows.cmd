@@ -71,10 +71,10 @@ $ProgressPreference = 'SilentlyContinue'
 #   - 图片能力：gpt-4o / gpt-4o-mini / claude-sonnet-4 / gemini-2.0-flash
 #     支持图片输入；deepseek-chat 不支持（默认关闭图片输入）
 # ============================================================
-$setupConfigUrl = 'https://workbuddy.oneapis.cn/api/config'
-$setupApiBaseUrl = 'https://newapi-bff.oneapis.cn/v1'
+$setupConfigUrl = '__BFF_ORIGIN__/api/config'
+$setupApiBaseUrl = '__API_BASE_URL__'
 $setupEndpoint = $setupApiBaseUrl + '/models'
-$capabilitiesUrl = 'https://workbuddy.oneapis.cn/setup/workbuddy-model-capabilities.txt'
+$capabilitiesUrl = '__BFF_ORIGIN__/setup/workbuddy-model-capabilities.txt'
 # 内置默认模型列表：配置接口与 /models 都拉不到时的兜底，
 # 让配置不依赖网络也能写入。已同步为 aihuobao.cn token 白名单模型；
 # 图片能力与上方说明一致（查找键统一小写）。
