@@ -275,20 +275,19 @@ async def bind_account(body: BindBody, response: Response,
         return fail(f"密码需为 8-{MAX_PASSWORD_LEN} 位")
     if not redeem_code.is_redeem_account(session["username"]):
         return fail("当前账号已是正式账号，无需绑定")
+    # 统一走管理员接口 PUT /api/user/（BFF 管理员 token 代改）：
+    # 用户态 PUT /api/user/self 要求 original_password（旧密码），而兑换码
+    # 用户的旧密码是派生密码、BFF 无状态设计不存码，拿不到 —— 管理员代改
+    # 是唯一不需要 original_password 的路径。安全性由三层保证：
+    #   ① require_session：只有本人会话能触发
+    #   ② is_redeem_account：只对兑换码影子账号生效
+    #   ③ username 锁定为当前 rc_ 名（防抢注见上），用户无法借此动别人账号
+    # 管理员 token 仅在服务端使用，不下发前端。
+    await redeem_code.bind_account(session["uid"], username, body.password)
     if username == session["username"]:
-        # 保持 rc_ 名仅设密码：走**用户态** PUT /api/user/self（带自己的 PAT，
-        # new-api 前端「个人设置」同款路径）。实测 PUT /api/user/ 是 AdminAuth
-        # 专属，普通用户 PAT 调用报 "Unauthorized, insufficient privileges"。
-        if not MOCK:
-            await na.update_self_password(session["pat"], session["uid"], body.password)
-        else:
-            await redeem_code.bind_account(session["uid"], username, body.password)
-        # 结构判定（is_redeem_account）不会再变，靠这份登记告诉 /user/self
-        # 「绑定提示可以收起来了」
+        # 保持 rc_ 名仅设密码：结构判定（is_redeem_account）不会再变，
+        # 靠这份登记告诉 /user/self 「绑定提示可以收起来了」
         redeem_code.mark_password_set(session["uid"])
-    else:
-        # 改名路径：换成新的非 rc_ 用户名，仍走管理员接口改名 + 改密
-        await redeem_code.bind_account(session["uid"], username, body.password)
     # 改账密后旧 PAT 是否仍有效不做假设，直接用新账密重登换一份新的，
     # 避免用户绑定完立刻遇到 401。
     info = await _relogin(username, body.password, request_ip=None)

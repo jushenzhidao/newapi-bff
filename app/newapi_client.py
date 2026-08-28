@@ -399,19 +399,9 @@ async def get_self(pat: str, uid: int) -> dict:
     return body["data"]
 
 
-async def update_self_password(pat: str, uid: int, password: str) -> None:
-    """用户态修改自身密码（兑换码账号绑定密码）。
-
-    实测链路：PUT /api/user/（管理员改账密）用普通用户 PAT 调用会报
-    "Unauthorized, insufficient privileges" —— 该接口是 AdminAuth 专属；
-    普通用户改自己密码的正确路径是 PUT /api/user/self（UserAuth，
-    new-api 前端「个人设置」同款）。
-    只传 password：new-api UpdateSelf 分段更新，零值字段（display_name 等）
-    不会被清；改完旧密码立即失效（PAT 不受影响）。
-    """
-    await request("PUT", "/api/user/self",
-                  headers=user_headers(pat, uid),
-                  json={"password": password})
+# 注：用户态改密码（PUT /api/user/self）要求 original_password —— 兑换码账号
+# 的旧密码是 HMAC 派生值、BFF 无状态不存码，拿不到，故「绑定密码」不走此路，
+# 统一由 redeem_code.bind_account 用管理员接口代改（见 main.py bind 说明）。
 
 
 async def list_tokens(pat: str, uid: int, page: int = 1, size: int = 100) -> dict:
