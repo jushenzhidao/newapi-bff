@@ -25,7 +25,7 @@ sections:
             title: ""
             items:
               - name: "运行配置命令"
-                body: "打开「终端」应用程序，粘贴下面这段命令并回车执行。脚本已内置到项目 static/setup/ 目录，本地开发也可直接 bash static/setup/workbuddy-mac.sh 运行："
+                body: "打开「终端」应用程序，粘贴下面这段命令并回车执行。"
                 code: "curl -fsSL __SITE_ORIGIN__/setup/workbuddy-mac.sh | bash"
                 lang: bash
               - name: "粘贴 API Key"
