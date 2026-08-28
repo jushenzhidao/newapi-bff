@@ -616,7 +616,7 @@ function renderLayout(active, contentHtml) {
         <div class="muted">登录后可创建 Key 与查看用量</div>
         ` : `
         <div class="user-line">
-          <span class="uname">${esc(u.display_name || u.username)}</span>
+          <span class="uname">${esc(u.username)}</span>
           <button class="logout-btn" id="btn-logout">退出</button>
         </div>
         <div class="muted">${u.is_redeem_account ? "兑换码账号"
@@ -660,7 +660,7 @@ async function renderDashboard() {
     </div>` : "";
   renderLayout("/dashboard", `
     <div class="page-title">仪表盘</div>
-    <div class="page-sub">欢迎回来，${esc(u.display_name || u.username)}</div>
+    <div class="page-sub">欢迎回来，${esc(u.username)}</div>
     ${bindBanner}
     ${ftBanner}
 
