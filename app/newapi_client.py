@@ -399,16 +399,21 @@ async def get_self(pat: str, uid: int) -> dict:
     return body["data"]
 
 
-async def update_self_password(pat: str, uid: int, password: str) -> None:
+async def update_self_password(pat: str, uid: int, username: str,
+                               password: str, group: str = "") -> None:
     """用户态修改自身密码（兑换码账号绑定密码的正确姿势）。
 
-    实测契约：PUT /api/user/self {password: <新密码>}，带用户自己的 PAT。
-    与管理员 PUT /api/user/ 的区别：用户态自改**只动密码、不碰 username**，
-    不需要借管理员权限；改完旧密码立即失效（PAT 不受影响）。
+    实测契约（飞哥抓包确认）：PUT /api/user/，带用户自己的 PAT，
+    body = {id, username, password, group}：
+      - id / username / group 取自 GET /api/user/self（group 传当前值避免被清）
+      - new-api 对普通用户调用做了 self-check：id 必须等于自己，越权 403
+      - 改完旧密码立即失效（PAT 不受影响）
+    注意与管理员 PUT /api/user/ 的区别：那是 AdminAuth + 可改任意用户/字段。
     """
-    await request("PUT", "/api/user/self",
+    await request("PUT", "/api/user/",
                   headers=user_headers(pat, uid),
-                  json={"password": password})
+                  json={"id": int(uid), "username": username,
+                        "password": password, "group": group})
 
 
 async def list_tokens(pat: str, uid: int, page: int = 1, size: int = 100) -> dict:
