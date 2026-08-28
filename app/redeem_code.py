@@ -67,6 +67,10 @@ logger = logging.getLogger("bff.redeem_code")
 # 允许用户从卡片上带着横杠抄进来。可通过 BFF_REDEEM_CODE_PATTERN 覆盖。
 _CODE_RE = re.compile(config.REDEEM_CODE_PATTERN)
 
+# 旧版派生名前缀（rc_<HMAC>）。用户名规则已改为「码前 18 位」，此常量仅
+# 保留给绑定改名的防占位校验使用（禁止把自己改成 rc_ 开头的名字）。
+RC_PREFIX = "rc_"
+
 
 def normalize(code: str) -> str:
     """统一兑换码写法：去空白、去分隔符、转小写。

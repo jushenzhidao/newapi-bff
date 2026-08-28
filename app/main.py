@@ -267,6 +267,10 @@ async def bind_account(body: BindBody, response: Response,
     username = body.username.strip() or session["username"]
     if not re.match(r"^[a-zA-Z0-9_]{2,20}$", username):
         return fail("用户名需为 2-20 位字母、数字或下划线")
+    if username != session["username"] and username.startswith(redeem_code.RC_PREFIX):
+        # 改名路径禁止换成 rc_ 开头的名字：那是「码前 18 位」的形态，
+        # 换成未来的码前缀名会让该码登录时建号撞名、永久作废
+        return fail(f"用户名不能以 {redeem_code.RC_PREFIX} 开头")
     if not 8 <= len(body.password) <= MAX_PASSWORD_LEN:
         return fail(f"密码需为 8-{MAX_PASSWORD_LEN} 位")
     if not redeem_code.is_redeem_uid(session["uid"]):
@@ -280,10 +284,10 @@ async def bind_account(body: BindBody, response: Response,
     #   ③ username 锁定为当前码前缀名，用户无法借此动别人账号
     # 管理员 token 仅在服务端使用，不下发前端。
     await redeem_code.bind_account(session["uid"], username, body.password)
-    if username == session["username"]:
-        # 保持用户名仅设密码：结构判定不会再变，
-        # 靠这份登记告诉 /user/self 「绑定提示可以收起来了」
-        redeem_code.mark_password_set(session["uid"])
+    # 绑定完成（无论保持码前缀名还是改名）一律登记「已设密码」：
+    # /user/self 的 is_redeem_account = 登记中 且 未设密码 —— 漏掉改名路径
+    # 的话，改名绑定后兑换码 uid 登记还在、密码标记缺失，绑定横幅永远弹
+    redeem_code.mark_password_set(session["uid"])
     # 改账密后旧 PAT 是否仍有效不做假设，直接用新账密重登换一份新的，
     # 避免用户绑定完立刻遇到 401。
     info = await _relogin(username, body.password, request_ip=None)
