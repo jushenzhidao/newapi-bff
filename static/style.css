@@ -849,3 +849,17 @@ tbody tr:hover { background: #fafbfd; }
 .doc-crumb a { color: var(--text-2); text-decoration: none; }
 .doc-crumb a:hover { color: var(--primary); }
 .doc-crumb span { margin: 0 6px; }
+
+/* 教程视频未配置时的占位 */
+.doc-video-empty {
+  aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center;
+  background: var(--bg); border: 1px dashed var(--border); border-radius: 10px;
+  color: var(--text-3); font-size: 14px;
+}
+
+/* 教程视频未配置时的占位 */
+.doc-video-empty {
+  aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center;
+  background: var(--bg); border: 1px dashed var(--border); border-radius: 10px;
+  color: var(--text-3); font-size: 14px;
+}

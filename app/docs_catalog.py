@@ -77,6 +77,12 @@ def _variables() -> dict[str, str]:
         "points_unit": config.POINTS_UNIT_NAME,
         "points_per_cny": str(config.POINTS_PER_CNY),
         "contact": config.BRAND_CONTACT,
+        # 三个教程视频外链（管理后台「接入文档」组配置），留空时前端渲染占位
+        "video_win": config.DOC_VIDEO_WIN_URL,
+        "video_mac": config.DOC_VIDEO_MAC_URL,
+        "video_manual": config.DOC_VIDEO_MANUAL_URL,
+        # 支持的模型清单（顿号分隔），教程「手动配置」里展示给用户
+        "doc_models_text": "、".join(config.DOC_MODELS),
     }
 
 

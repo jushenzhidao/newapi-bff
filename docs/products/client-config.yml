@@ -18,7 +18,7 @@ sections:
       - name: "macOS 一键配置"
         sections:
           - type: video
-            src: "/static/videos/mac-setup.mp4"
+            src: "{{video_mac}}"
             poster: "/static/images/poster.jpg"
             title: "macOS 配置教程"
           - type: steps
@@ -40,14 +40,14 @@ sections:
       - name: "Windows 一键配置"
         sections:
           - type: video
-            src: "/static/videos/win-setup.mp4"
+            src: "{{video_win}}"
             poster: "/static/images/poster.jpg"
             title: "Windows 配置教程"
           - type: steps
             title: ""
             items:
               - name: "下载配置工具"
-                body: "[**下载 workbuddy-windows.cmd**](https://workbuddy.oneworker.cn/setup/workbuddy-windows.cmd)"
+                body: "[**下载 workbuddy-windows.cmd**](/setup/workbuddy-windows.cmd)"
               - name: "运行并粘贴 Key"
                 body: "双击运行保存的 `workbuddy-windows.cmd`，按提示粘贴下面这段 Key："
                 fields:
@@ -59,6 +59,10 @@ sections:
                 image: "/static/images/workbuddy-select-model.webp"
       - name: "手动配置"
         sections:
+          - type: video
+            src: "{{video_manual}}"
+            poster: "/static/images/poster.jpg"
+            title: "手动配置教程"
           - type: steps
             title: ""
             items:
@@ -69,7 +73,7 @@ sections:
                 body: "点击「添加模型」，提供商选择「其他（自定义 / Custom）」。"
                 image: "/static/images/workbuddy-manual-2-provider.webp"
               - name: "填入配置并保存"
-                body: "把下面 3 项信息填到对应字段后保存："
+                body: "把下面 3 项信息填到对应字段后保存。当前支持的模型：{{doc_models_text}}"
                 fields:
                   - label: "接口地址"
                     value: "https://api.aihuobao.cn/v1"
@@ -78,5 +82,6 @@ sections:
                     value: "__USER_KEY__"
                     copyable: true
                   - label: "模型名称"
-                    value: "auto"
+                    value: "{{default_model}}"
+                    copyable: true
                 image: "/static/images/workbuddy-manual-3-fill.webp"

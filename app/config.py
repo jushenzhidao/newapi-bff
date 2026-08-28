@@ -260,6 +260,10 @@ _DEF_BRAND_CONTACT: str = os.getenv("BFF_BRAND_CONTACT", "").strip()  # 客服�
 # 教程页 / 代码示例参数
 _DEF_API_BASE_URL: str = os.getenv("BFF_API_BASE_URL", NEWAPI_BASE_URL.rstrip("/") + "/v1")
 _DEF_DOC_DEFAULT_MODEL: str = os.getenv("BFF_DOC_DEFAULT_MODEL", "gpt-4o-mini")
+# 三个教程视频的外链地址（管理后台「接入文档」组可改）。留空 = 教程页显示占位提示。
+_DEF_DOC_VIDEO_WIN_URL: str = os.getenv("BFF_DOC_VIDEO_WIN_URL", "").strip()
+_DEF_DOC_VIDEO_MAC_URL: str = os.getenv("BFF_DOC_VIDEO_MAC_URL", "").strip()
+_DEF_DOC_VIDEO_MANUAL_URL: str = os.getenv("BFF_DOC_VIDEO_MANUAL_URL", "").strip()
 # 首页/文档页展示的模型清单（逗号分隔）
 _DEF_DOC_MODELS: tuple = tuple(
     m.strip() for m in os.getenv(

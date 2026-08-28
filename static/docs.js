@@ -73,11 +73,14 @@ async function docCopy(id, btn) {
   }
 }
 
-/* 教程视频：原生 <video>，零额外依赖。 */
+/* 教程视频：原生 <video>，零额外依赖。src 为空（后台未配视频地址）时渲染占位提示。 */
 function docVideo(v) {
-  if (!v || !v.src) return "";
-  const poster = v.poster ? ` poster="${esc(v.poster)}"` : "";
+  if (!v) return "";
   const title = v.title ? `<div class="doc-video-cap">${esc(v.title)}</div>` : "";
+  if (!v.src) {
+    return `<div class="doc-video-wrap"><div class="doc-video-empty">教程视频准备中，敬请期待</div>${title}</div>`;
+  }
+  const poster = v.poster ? ` poster="${esc(v.poster)}"` : "";
   return `<div class="doc-video-wrap">` +
     `<video class="doc-video" controls preload="none" src="${esc(v.src)}"${poster}></video>${title}</div>`;
 }

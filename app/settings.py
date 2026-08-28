@@ -211,6 +211,12 @@ SPECS: dict[str, tuple[str, str, Callable[[Any], Any], str]] = {
     "DOC_MODELS": ("doc", "展示模型清单", _str_list(), "逗号分隔"),
     "DOC_PRODUCTS": ("doc", "上架产品清单", _str_list(),
                      "逗号分隔的产品 id，留空 = 全部上架；填了不存在的 id 会在 /readyz 报错"),
+    "DOC_VIDEO_WIN_URL": ("doc", "Windows 教程视频地址", _s(300),
+                          "mp4 直链，留空则该教程视频显示占位提示"),
+    "DOC_VIDEO_MAC_URL": ("doc", "macOS 教程视频地址", _s(300),
+                          "mp4 直链，留空则该教程视频显示占位提示"),
+    "DOC_VIDEO_MANUAL_URL": ("doc", "手动配置教程视频地址", _s(300),
+                             "mp4 直链，留空则该教程视频显示占位提示"),
 
     # ---- 定价表 ----
     "PRICING_TTL": ("pricing", "定价缓存秒数", _i(0, 86_400),

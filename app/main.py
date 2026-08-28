@@ -811,6 +811,9 @@ async def admin_settings_get(_s: dict = Depends(require_admin)):
 _DOCS_AFFECTING_KEYS = frozenset({
     "BRAND_NAME", "BRAND_CONTACT", "API_BASE_URL", "POINTS_UNIT_NAME",
     "POINTS_PER_CNY", "DOC_DEFAULT_MODEL", "DOC_PRODUCTS",
+    "DOC_VIDEO_WIN_URL", "DOC_VIDEO_MAC_URL", "DOC_VIDEO_MANUAL_URL",
+    # DOC_MODELS 会出现在教程「手动配置」的支持模型清单里，也要失效缓存
+    "DOC_MODELS",
 })
 _PRICING_AFFECTING_KEYS = frozenset({
     "PRICING_TTL", "PRICING_GROUPS", "DOC_MODELS", "POINTS_PER_CNY",
