@@ -52,7 +52,9 @@ BFF 重装、换机器、删库都不影响 —— 只要 BFF_SECRET_KEY 不变�
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
+import os
 import re
 
 from . import config
@@ -277,13 +279,48 @@ async def _rollback(uid: int, code: str, exc: Exception) -> None:
     except Exception:
         logger.exception("回滚删号失败，残留空账号 uid=%s，需人工清理", uid)
 
+# ==================== 「已设密码」登记 ====================
+# 允许 rc_ 名仅绑密码（不改名）后，两个问题要分开回答：
+#   username 前缀 → 「是不是兑换码派生账号」（结构判定，看 is_redeem_account）
+#   本文件这份登记 → 「是否已设置过密码、无需再提示绑定」（运营状态）
+# 文件丢失的后果仅仅是绑定横幅重新出现、用户再设一次密码 —— 无资损，可接受。
+
+_BOUND_FILE = os.path.join(config.DATA_DIR, "redeem-bound.json")
+
+
+def password_set(uid: int) -> bool:
+    try:
+        with open(_BOUND_FILE, "r", encoding="utf-8") as f:
+            return str(uid) in json.load(f)
+    except (OSError, ValueError):
+        return False
+
+
+def mark_password_set(uid: int) -> None:
+    """登记该兑换码账号已设置密码（rc_ 名保持不变的绑定路径）。"""
+    data: dict = {}
+    try:
+        with open(_BOUND_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    import time
+    data[str(uid)] = int(time.time())
+    d = os.path.dirname(_BOUND_FILE)
+    os.makedirs(d, exist_ok=True)
+    with open(_BOUND_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, sort_keys=True)
+
 
 async def bind_account(uid: int, new_username: str, new_password: str) -> None:
     """把兑换码影子账号升级为正式账号（改用户名 + 密码）。
 
     绑定后：
       - 用新账密正常登录
-      - 原兑换码**不再能登录**（派生账号名已改，算出来的名字查无此人）
+      - 原兑换码**不再能登录**（派生账号名已改，算出来的名字查无此人；
+        保持 rc_ 名仅改密时，派生密码被覆盖，同样不再能登录）
     余额、Key、日志全部保留，因为 uid 没变。
     """
     if config.MOCK_MODE:

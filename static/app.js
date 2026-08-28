@@ -732,13 +732,18 @@ async function renderDashboard() {
 
 /* ================= 绑定正式账号（兑换码账号专用） ================= */
 function openBindModal() {
+  /* 用户名锁定为当前卡号名（rc_ 开头）：后端允许「保持 rc_ 名仅设密码」的绑定路径
+   * （uid 记入已设密码登记，绑定提示随之消失）。置灰防止用户改成别的 rc_ 名（抢注）。
+   * 提交时不传 username，后端默认取 session 当前名。 */
   openModal(`
     <div class="modal-title">绑定账号</div>
-    <div class="modal-desc">设置用户名和密码后，即可不依赖兑换码登录。当前余额、API Key 与调用记录全部保留。</div>
+    <div class="modal-desc">绑定密码后，即可不依赖兑换码登录。当前余额、API Key 与调用记录全部保留。</div>
     <form id="bind-form">
       <div class="field">
         <label>用户名</label>
-        <input id="b-username" placeholder="2-20 位字母、数字或下划线" autocomplete="username">
+        <input id="b-username" value="${esc(currentUser.username || "")}" disabled
+          autocomplete="username" style="opacity:.6;cursor:not-allowed">
+        <div class="cfg-hint">登录名保持为当前卡号名，绑定后用它 + 你设置的密码登录。</div>
       </div>
       <div class="field">
         <label>密码</label>
@@ -748,7 +753,7 @@ function openBindModal() {
         <label>确认密码</label>
         <input id="b-password2" type="password" placeholder="再次输入密码" maxlength="20" autocomplete="new-password">
       </div>
-      <div class="auth-note">${ICONS.info}<span>绑定后原兑换码将不能再用于登录，请改用新的用户名密码。</span></div>
+      <div class="auth-note">${ICONS.info}<span>绑定后原兑换码将不能再用于登录，请牢记设置的密码。</span></div>
       <div class="modal-actions">
         <button type="button" class="btn btn-outline" id="b-cancel">稍后再说</button>
         <button type="submit" class="btn btn-primary" id="b-submit">确认绑定</button>
@@ -758,10 +763,10 @@ function openBindModal() {
   document.getElementById("b-cancel").onclick = closeModal;
   document.getElementById("bind-form").onsubmit = async e => {
     e.preventDefault();
-    const username = document.getElementById("b-username").value.trim();
+    const username = currentUser.username || "";
     const password = document.getElementById("b-password").value;
     const password2 = document.getElementById("b-password2").value;
-    if (!/^[a-zA-Z0-9_]{2,20}$/.test(username)) return toast("用户名需为 2-20 位字母、数字或下划线", "error");
+    if (!username) return toast("未获取到用户名，请刷新页面重试", "error");
     if (password.length < 8 || password.length > 20) return toast("密码需为 8-20 位", "error");
     if (password !== password2) return toast("两次输入的密码不一致", "error");
     const btn = document.getElementById("b-submit");

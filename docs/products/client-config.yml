@@ -73,7 +73,7 @@ sections:
                 body: "点击「添加模型」，提供商选择「其他（自定义 / Custom）」。"
                 image: "/static/images/workbuddy-manual-2-provider.webp"
               - name: "填入配置并保存"
-                body: "把下面 3 项信息填到对应字段后保存。当前支持的模型：{{doc_models_text}}"
+                body: "把下面 3 项信息填到对应字段后保存"
                 fields:
                   - label: "接口地址"
                     value: "https://api.aihuobao.cn/v1"

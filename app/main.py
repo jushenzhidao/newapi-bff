@@ -181,7 +181,8 @@ class CodeLoginBody(BaseModel):
 
 
 class BindBody(BaseModel):
-    username: str
+    # 可选：留空 = 保持当前 rc_ 卡号名，仅设置密码（前端置灰展示时的路径）
+    username: str = ""
     password: str
 
 
@@ -255,21 +256,30 @@ async def login_by_code(body: CodeLoginBody, request: Request, response: Respons
 @app.post("/api/user/bind")
 async def bind_account(body: BindBody, response: Response,
                        session: dict = Depends(require_session)):
-    """兑换码账号升级为正式账号（设置用户名密码，便于以后不带码登录）。
+    """兑换码账号设置用户名密码，便于以后不带码登录。
 
-    绑定后 uid 不变，余额/Key/日志全部保留；原兑换码不再能登录。
+    两种路径：
+      - username 留空 / 等于当前 rc_ 名 → 保持卡号名不变，仅设置密码
+        （rc_ 派生密码被覆盖，原兑换码同样不再能登录；uid 记入「已设密码」登记）
+      - username 为新名（非 rc_ 开头）→ 改名 + 改密（经典路径）
+    绑定后 uid 不变，余额/Key/日志全部保留。
     """
-    username = body.username.strip()
+    username = body.username.strip() or session["username"]
     if not re.match(r"^[a-zA-Z0-9_]{2,20}$", username):
         return fail("用户名需为 2-20 位字母、数字或下划线")
-    if username.startswith(redeem_code.USERNAME_PREFIX):
-        # 否则用户可以占用别的兑换码将来会派生出的账号名，属于抢注攻击
+    if username != session["username"] and username.startswith(redeem_code.USERNAME_PREFIX):
+        # 改成 rc_ 开头的**其他**名字 = 占用别的兑换码将来会派生的账号名，
+        # 属于抢注攻击；保持自己当前 rc_ 名（仅设密码）不受此限
         return fail(f"用户名不能以 {redeem_code.USERNAME_PREFIX} 开头")
     if not 8 <= len(body.password) <= MAX_PASSWORD_LEN:
         return fail(f"密码需为 8-{MAX_PASSWORD_LEN} 位")
     if not redeem_code.is_redeem_account(session["username"]):
         return fail("当前账号已是正式账号，无需绑定")
     await redeem_code.bind_account(session["uid"], username, body.password)
+    if username == session["username"]:
+        # 保持 rc_ 名的路径：结构判定（is_redeem_account）不会再变，
+        # 靠这份登记告诉 /user/self 「绑定提示可以收起来了」
+        redeem_code.mark_password_set(session["uid"])
     # 改账密后旧 PAT 是否仍有效不做假设，直接用新账密重登换一份新的，
     # 避免用户绑定完立刻遇到 401。
     info = await _relogin(username, body.password, request_ip=None)
@@ -329,8 +339,11 @@ async def register(body: RegisterBody, request: Request, response: Response):
     if username.startswith(redeem_code.USERNAME_PREFIX):
         # 保留前缀：否则可抢注别的兑换码将来会派生出的账号名
         return fail(f"用户名不能以 {redeem_code.USERNAME_PREFIX} 开头")
-    if not re.match(r"^\d{6}$", body.verification_code):
-        return fail("验证码应为 6 位数字")
+    # 验证码格式只做宽松兜底（非空、无空白、长度合理）：真正的裁决在上游 ——
+    # new-api 发的码可能是字母数字混合，BFF 写死 6 位纯数字会把有效码误拦在门外
+    _verify_code = body.verification_code.strip()
+    if not re.match(r"^[A-Za-z0-9]{4,10}$", _verify_code):
+        return fail("验证码格式不正确")
     if MOCK:
         if username in store.users:
             return fail("用户名已存在，请直接登录")
@@ -350,7 +363,7 @@ async def register(body: RegisterBody, request: Request, response: Response):
         return fail("邮箱格式不正确")
     try:
         await na.register_user(username, body.password, email,
-                               body.verification_code,
+                               _verify_code,
                                client_ip=client_ip(request))
     except NewApiError as e:
         msg = e.message
@@ -401,7 +414,8 @@ def _self_payload(uid: int, username: str, email: str, quota: int,
         "first_topup_available": (not promo.first_topup_used(uid)) and
                                  config.PROMO_FIRST_TOPUP_ENABLED,
         # 兑换码影子账号：前端据此提示「绑定账号」，避免用户丢码即丢余额
-        "is_redeem_account": redeem_code.is_redeem_account(username),
+        "is_redeem_account": (redeem_code.is_redeem_account(username)
+                              and not redeem_code.password_set(uid)),
         # 仅用于前端决定是否显示管理入口。真正的鉴权在 require_admin，
         # 前端把这个字段改成 true 也调不通任何 /api/admin/* 接口。
         "is_admin": is_admin(session) if session else False,

@@ -85,10 +85,13 @@ $fallbackModelIDs = @(
     'deepseek-chat',
     'gemini-2.0-flash'
 )
+# 图片/推理/自定义协议能力默认全部开启（与产品要求一致）：
+# 兜底清单覆盖白名单全部模型为 true；在线能力清单拉取成功时以清单为准。
 $fallbackImageCapabilities = @{
     'gpt-4o' = $true
     'gpt-4o-mini' = $true
     'claude-sonnet-4' = $true
+    'deepseek-chat' = $true
     'gemini-2.0-flash' = $true
 }
 $userProfile = [Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
@@ -289,8 +292,8 @@ try {
 
     $apiBaseUrl = $setupApiBaseUrl
     $supportsToolCall = $true
-    $supportsReasoning = $false
-    $useCustomProtocol = $false
+    $supportsReasoning = $true
+    $useCustomProtocol = $true
     $maxInputTokens = 200000
     $maxOutputTokens = 65536
 

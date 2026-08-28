@@ -29,11 +29,12 @@ CAPABILITIES_URL="https://workbuddy.oneworker.cn/setup/workbuddy-model-capabilit
 # 本地补充图片能力：new-api 渠道中支持「图片输入」的模型，一行一个，查找键统一小写。
 # 在线清单拉取失败时本清单依然生效。
 # 你渠道 5 个模型中：gpt-4o / gpt-4o-mini / claude-sonnet-4 / gemini-2.0-flash
-# 支持图片输入；deepseek-chat 不支持（不列出 = 默认关闭图片输入）。
+# 全部支持图片输入（产品要求能力默认勾选开启）。
 EXTRA_CAPABILITIES='# aihuobao.cn 渠道中支持图片输入的模型
 gpt-4o|true
 gpt-4o-mini|true
 claude-sonnet-4|true
+deepseek-chat|true
 gemini-2.0-flash|true'
 
 # 内置兜底模型列表：在线拉取失败时的降级清单，与 /v1/models 同构
@@ -353,8 +354,8 @@ function run(argv) {
   }
 
   const supportsToolCall = true;
-  const supportsReasoning = false;
-  const useCustomProtocol = false;
+  const supportsReasoning = true;
+  const useCustomProtocol = true;
   const maxInputTokens = 200000;
   const maxOutputTokens = 65536;
   const imageCapabilities = readImageCapabilities(capabilitiesPath);
