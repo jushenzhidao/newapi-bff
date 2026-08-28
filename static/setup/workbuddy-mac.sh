@@ -402,7 +402,7 @@ function run(argv) {
     const capabilityKey = modelID.toLowerCase();
     const supportsImages = Object.prototype.hasOwnProperty.call(imageCapabilities, capabilityKey)
       ? imageCapabilities[capabilityKey]
-      : false;
+      : true;
     return {
       id: modelID,
       name: modelID,

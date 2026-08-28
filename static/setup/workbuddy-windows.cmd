@@ -375,7 +375,7 @@ try {
     $fixedModels = @()
     $fixedModelByID = @{}
     foreach ($modelID in $modelIDs) {
-        $modelSupportsImages = $false
+        $modelSupportsImages = $true
         $capabilityKey = $modelID.ToLowerInvariant()
         if ($imageCapabilities.ContainsKey($capabilityKey)) {
             $modelSupportsImages = [bool]$imageCapabilities[$capabilityKey]

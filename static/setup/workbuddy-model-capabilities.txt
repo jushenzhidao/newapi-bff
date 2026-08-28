@@ -1,9 +1,5 @@
 # WorkBuddy 模型图片输入能力清单
-# 格式：模型ID|true/false（支持图片输入=true）。# 开头为注释。
-# 查找键统一小写；脚本按前缀匹配不到时默认关闭图片输入。
-# 产品要求：能力默认勾选开启，白名单 5 模型全部登记 |true。
-gpt-4o|true
-gpt-4o-mini|true
-claude-sonnet-4|true
-deepseek-chat|true
-gemini-2.0-flash|true
+# 语义：能力默认全部开启 —— 清单未登记的模型视为 true；
+# 需要关闭某模型的图片输入时，在这里显式登记 模型ID|false。
+# 格式：模型ID|true/false。# 开头为注释。查找键统一小写。
+deepseek-chat|false
