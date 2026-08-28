@@ -399,21 +399,19 @@ async def get_self(pat: str, uid: int) -> dict:
     return body["data"]
 
 
-async def update_self_password(pat: str, uid: int, username: str,
-                               password: str, group: str = "") -> None:
-    """用户态修改自身密码（兑换码账号绑定密码的正确姿势）。
+async def update_self_password(pat: str, uid: int, password: str) -> None:
+    """用户态修改自身密码（兑换码账号绑定密码）。
 
-    实测契约（飞哥抓包确认）：PUT /api/user/，带用户自己的 PAT，
-    body = {id, username, password, group}：
-      - id / username / group 取自 GET /api/user/self（group 传当前值避免被清）
-      - new-api 对普通用户调用做了 self-check：id 必须等于自己，越权 403
-      - 改完旧密码立即失效（PAT 不受影响）
-    注意与管理员 PUT /api/user/ 的区别：那是 AdminAuth + 可改任意用户/字段。
+    实测链路：PUT /api/user/（管理员改账密）用普通用户 PAT 调用会报
+    "Unauthorized, insufficient privileges" —— 该接口是 AdminAuth 专属；
+    普通用户改自己密码的正确路径是 PUT /api/user/self（UserAuth，
+    new-api 前端「个人设置」同款）。
+    只传 password：new-api UpdateSelf 分段更新，零值字段（display_name 等）
+    不会被清；改完旧密码立即失效（PAT 不受影响）。
     """
-    await request("PUT", "/api/user/",
+    await request("PUT", "/api/user/self",
                   headers=user_headers(pat, uid),
-                  json={"id": int(uid), "username": username,
-                        "password": password, "group": group})
+                  json={"password": password})
 
 
 async def list_tokens(pat: str, uid: int, page: int = 1, size: int = 100) -> dict:

@@ -276,14 +276,11 @@ async def bind_account(body: BindBody, response: Response,
     if not redeem_code.is_redeem_account(session["username"]):
         return fail("当前账号已是正式账号，无需绑定")
     if username == session["username"]:
-        # 保持 rc_ 名仅设密码：走**用户态** PUT /api/user/（带自己的 PAT，
-        # new-api 对普通用户做 self-check：只允许改 id=自己）。
-        # group 从 /api/user/self 取当前值回传，避免被空值清掉分组。
+        # 保持 rc_ 名仅设密码：走**用户态** PUT /api/user/self（带自己的 PAT，
+        # new-api 前端「个人设置」同款路径）。实测 PUT /api/user/ 是 AdminAuth
+        # 专属，普通用户 PAT 调用报 "Unauthorized, insufficient privileges"。
         if not MOCK:
-            self_info = await na.get_self(session["pat"], session["uid"])
-            await na.update_self_password(session["pat"], session["uid"],
-                                          username, body.password,
-                                          group=str(self_info.get("group") or ""))
+            await na.update_self_password(session["pat"], session["uid"], body.password)
         else:
             await redeem_code.bind_account(session["uid"], username, body.password)
         # 结构判定（is_redeem_account）不会再变，靠这份登记告诉 /user/self
