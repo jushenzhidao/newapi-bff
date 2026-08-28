@@ -369,16 +369,20 @@ async def admin_delete_user(uid: int) -> None:
     await admin_request("DELETE", f"/api/user/{int(uid)}")
 
 
-async def admin_update_user(uid: int, username: str, password: str) -> None:
-    """管理员修改用户账密（兑换码账号升级为正式账号）。
+async def admin_update_user(uid: int, username: str, password: str,
+                            group: str = "default") -> None:
+    """管理员修改用户账密（兑换码账号绑定密码）。
 
-    实测契约：PUT /api/user/ {id, username, password, display_name}
+    实测契约（new-api 后台用户编辑抓包）：PUT /api/user/
+      {id, username, display_name, password, group}
+    - display_name 固定「兑换码用户」；group 默认 default（不传会被清空）
     - 改完旧账密立即失效、新账密可登录，uid 不变（余额/Key/日志全保留）
     - 用户名重复报 "Error 1062 (23000): Duplicate entry 'xxx' for key 'users.username'"
     """
     await admin_request("PUT", "/api/user/",
                         json={"id": int(uid), "username": username,
-                              "password": password, "display_name": username})
+                              "display_name": "兑换码用户",
+                              "password": password, "group": group})
 
 
 async def admin_add_quota(uid: int, quota: int) -> None:
