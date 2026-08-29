@@ -36,22 +36,32 @@ import httpx
 
 from app import redeem_code
 
-BFF = os.getenv("BFF_BASE_URL", "http://127.0.0.1:8300")
-NEWAPI = os.getenv("NEWAPI_BASE_URL", "https://api.aihuobao.cn")
+BFF = os.getenv("BFF_BASE_URL", "http://127.0.0.1:8300").rstrip("/")
+# 上游地址同样**不设默认值**：本脚本会在真实环境建号、发卡、核销、删号，
+# 默认值若指向测试环境，漏配变量时会静默在那边跑一整套破坏性操作，
+# 且得出的结论被当成生产结论 —— 比直接报错危险得多。
+NEWAPI = os.getenv("NEWAPI_BASE_URL", "").rstrip("/")
 
 # 管理员凭证只从环境变量读，绝不留默认值。
 # 这个脚本要连真实环境建号删号，凭证等同后台管理员密码；写进源码
 # 就等于随仓库一起分发出去，而本仓库有公开 remote。
 ADMIN_U = os.getenv("NEWAPI_ADMIN_USERNAME", "")
 ADMIN_P = os.getenv("NEWAPI_ADMIN_PASSWORD", "")
-if not (ADMIN_U and ADMIN_P):
+if not (ADMIN_U and ADMIN_P) or not NEWAPI:
+    missing = []
+    if not NEWAPI:
+        missing.append("  export NEWAPI_BASE_URL=<目标 new-api，如 https://newapi-bff.oneapis.cn>")
+    if not ADMIN_U:
+        missing.append("  export NEWAPI_ADMIN_USERNAME=<管理员用户名>")
+    if not ADMIN_P:
+        missing.append("  export NEWAPI_ADMIN_PASSWORD=<管理员密码>")
     sys.exit(
-        "缺少管理员凭证。本脚本会在真实环境建号/删号，需显式提供：\n"
-        "  export NEWAPI_ADMIN_USERNAME=<管理员用户名>\n"
-        "  export NEWAPI_ADMIN_PASSWORD=<管理员密码>\n"
-        f"可选：BFF_BASE_URL（当前 {BFF}）、NEWAPI_BASE_URL（当前 {NEWAPI}）\n"
+        "缺少必填配置。本脚本会在真实环境建号/发卡/核销/删号，必须显式指定目标：\n"
+        + "\n".join(missing)
+        + f"\n可选：BFF_BASE_URL（当前 {BFF}）\n"
         "离线回归请改用 e2e_redeem_mock.py，它不需要任何凭证。"
     )
+print(f"[目标] 上游 new-api: {NEWAPI} | BFF: {BFF} | 管理员: {ADMIN_U}")
 
 PASS, FAIL = [], []
 
