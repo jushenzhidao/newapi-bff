@@ -36,6 +36,7 @@ import secrets
 import time
 from collections.abc import Iterable
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -70,6 +71,15 @@ async def _lifespan(_app: FastAPI):
             config.POINTS_PER_CNY,
             config.POINTS_UNIT_NAME,
         )
+        # 真实模式没注入 NEWAPI_BASE_URL 就会连到内置默认（测试环境）上游：
+        # 不报错、不 500，只是用户数据全写进另一个库。这类事故排查代价极高，
+        # 启动时必须喊出来。
+        if not MOCK and config.NEWAPI_BASE_URL_IS_DEFAULT:
+            logger.warning(
+                "NEWAPI_BASE_URL 未注入，正在使用内置默认值 %s —— 生产部署请显式"
+                "设置为你的 new-api 域名，否则用户数据会写到错误的环境",
+                config.NEWAPI_BASE_URL,
+            )
         if MOCK:
             # mock 模式预置演示卡。兑换码语义与真实环境一致：只有预先发放的卡才有效，
             # 不能随便编一串就登录。
@@ -966,7 +976,14 @@ async def readyz():
         return JSONResponse(status_code=503,
                             content={"status": "unready", "checks": checks,
                                      "failed": list(reasons), "reasons": reasons})
-    return {"status": "ready", "checks": checks, "version": APP_VERSION}
+    return {
+        "status": "ready", "checks": checks, "version": APP_VERSION,
+        # 上游地址对排障至关重要：连错库（测试/生产）不会报错，只会表现为
+        # 「用户在 A 环境注册的账号，用 B 环境的 Key 调不通」。这里回显 host
+        # （不含路径与任何凭证，readyz 是无认证探针），并标记是否走了默认值。
+        "newapi_host": urlparse(config.NEWAPI_BASE_URL).hostname or "",
+        "newapi_is_default": bool(getattr(config, "NEWAPI_BASE_URL_IS_DEFAULT", False)),
+    }
 
 
 def _check_doc_products() -> tuple[bool, str]:

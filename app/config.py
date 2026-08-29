@@ -65,6 +65,11 @@ MOCK_MODE: bool = os.getenv("BFF_MOCK_MODE", "0") == "1"
 
 # new-api 部署地址
 NEWAPI_BASE_URL: str = os.getenv("NEWAPI_BASE_URL", "https://api.aihuobao.cn")
+# 是否走了内置默认值（即部署时没注入 NEWAPI_BASE_URL）。
+# 连错环境是**静默**的：不报错、不 500，只表现为「用户在这个环境注册的账号，
+# 拿另一个环境的 Key 调不通」，排查代价极高 —— 所以显式打标，供启动日志与
+# /readyz 告警，别让默认值悄悄生效。
+NEWAPI_BASE_URL_IS_DEFAULT: bool = "NEWAPI_BASE_URL" not in os.environ
 
 # 管理员账密（用于注册=影子建号、首充赠送 add_quota）。
 # 注意：不能写死管理员 PAT —— new-api 的 GET /api/user/token 每次调用都会重新生成 PAT，
