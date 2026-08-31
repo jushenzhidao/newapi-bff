@@ -276,7 +276,7 @@ _DEF_DOC_MODELS: tuple = tuple(
         "gpt-4o,gpt-4o-mini,claude-sonnet-4,deepseek-chat,gemini-2.0-flash",
     ).split(",") if m.strip()
 )
-# 「模型 → 供应商」映射，每项形如 "glm-5.2:智谱"（逗号分隔）。
+# 「模型 → 供应商」映射，每项形如 "glm-5.2:zai"（逗号分隔，供应商须用英文厂商名）。
 # 为什么不从网关取：new-api 的 /v1/models 虽有 owned_by 字段，但那是渠道属性
 # —— 实测 anthropic/claude-sonnet-4 标成 openai、glm-5.2 标 openai 而 glm-5.3
 # 标 volcengine，拿它当供应商会闹笑话。供应商是业务口径，由后台自己维护。

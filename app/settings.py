@@ -211,7 +211,7 @@ SPECS: dict[str, tuple[str, str, Callable[[Any], Any], str]] = {
     "DOC_DEFAULT_MODEL": ("doc", "示例默认模型", _s(80, allow_empty=False), ""),
     "DOC_MODELS": ("doc", "展示模型清单", _str_list(), "逗号分隔"),
     "MODEL_VENDORS": ("doc", "模型供应商映射", _str_list(),
-                      "格式「模型ID:供应商名」，逗号分隔，如 glm-5.2:智谱,deepseek-chat:DeepSeek；"
+                      "格式「模型ID:供应商名」，逗号分隔，如 glm-5.2:zai,deepseek-chat:DeepSeek；供应商须用英文厂商名（智谱=zai，豆包=Volcengine 等），不可填中文。"
                       "未配置的模型不显示供应商。网关的 owned_by 不可信（Claude 会被标成 openai），故自行维护"),
     "DOC_PRODUCTS": ("doc", "上架产品清单", _str_list(),
                      "逗号分隔的产品 id，留空 = 全部上架；填了不存在的 id 会在 /readyz 报错"),
