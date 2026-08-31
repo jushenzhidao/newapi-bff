@@ -292,6 +292,7 @@ function run(argv) {
     'gpt-4o', 'gpt-4o-mini', 'claude-sonnet-4', 'deepseek-chat', 'gemini-2.0-flash',
   ];
   let siteModels = [];
+  const modelVendors = {};   // 模型 → 供应商；未配置则 vendor 写 'Custom'
   let effectiveBaseURL = apiBaseURL;
   if (siteConfigPath && fileExists(siteConfigPath)) {
     try {
@@ -307,6 +308,14 @@ function run(argv) {
         }
         const bu = String(api.base_url || '').trim();
         if (bu !== '') { effectiveBaseURL = bu.replace(/\/+$/, ''); }
+        // 模型 → 供应商映射（后台「模型供应商映射」配置）。
+        // 网关 /v1/models 的 owned_by 不可信（Claude 会被标成 openai），故由后台维护。
+        if (api.model_vendors && typeof api.model_vendors === 'object') {
+          Object.keys(api.model_vendors).forEach(function (k) {
+            const v = String(api.model_vendors[k] || '').trim();
+            if (v !== '') { modelVendors[k] = v; }
+          });
+        }
       }
     } catch (error) { /* 解析失败保持内置 */ }
   }
@@ -410,7 +419,7 @@ function run(argv) {
     return {
       id: modelID,
       name: modelID,
-      vendor: 'Custom',
+      vendor: modelVendors[modelID] || 'Custom',
       url: effectiveBaseURL,
       apiKey: apiKey,
       supportsToolCall: supportsToolCall,

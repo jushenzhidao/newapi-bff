@@ -125,10 +125,17 @@ function New-FixedModel {
         [Parameter(Mandatory = $true)][bool]$SupportsImages
     )
 
+    # 后台配了供应商就写真实厂商名，否则保持 'Custom'（与老版本产出一致）
+    $vendorName = 'Custom'
+    if ($modelVendors.ContainsKey($ModelID)) {
+        $mapped = ([string]$modelVendors[$ModelID]).Trim()
+        if ($mapped) { $vendorName = $mapped }
+    }
+
     return [PSCustomObject][ordered]@{
         id = $ModelID
         name = $ModelID
-        vendor = 'Custom'
+        vendor = $vendorName
         url = $apiBaseUrl
         apiKey = $ApiKey
         supportsToolCall = $supportsToolCall
@@ -238,6 +245,14 @@ try {
                 $fallbackModelIDs = $remoteModels
                 Write-Host ('站点配置：{0} 个展示模型，网关 {1}' -f $remoteModels.Count, $setupApiBaseUrl) -ForegroundColor DarkGray
             }
+            # 模型 → 供应商映射（后台「模型供应商映射」配置）。没配 = 保持 Custom。
+            # 网关 /v1/models 的 owned_by 不可信（Claude 会被标成 openai），故由后台维护。
+            if ($null -ne $siteConfig.data.api.model_vendors) {
+                foreach ($p in $siteConfig.data.api.model_vendors.PSObject.Properties) {
+                    $v = ([string]$p.Value).Trim()
+                    if ($v) { $modelVendors[[string]$p.Name] = $v }
+                }
+            }
         }
     } catch {
         Write-Host '站点配置读取失败，使用内置默认清单。' -ForegroundColor DarkGray
@@ -245,9 +260,11 @@ try {
 
     Write-Host ''
     Write-Host '正在读取可用模型列表...' -ForegroundColor DarkGray
-    $modelIDs = $null
-    $fetchModelError = $null
-    try {
+$modelIDs = $null
+$fetchModelError = $null
+# 模型 → 供应商映射：从站点配置填充（未配置则为空，vendor 一律写 'Custom'）
+$modelVendors = @{}
+try {
         Enable-Tls12
         $setupResponse = Invoke-RestMethod -UseBasicParsing -Method Get -Uri $setupEndpoint -Headers @{ Authorization = ('Bearer ' + $apiKey) } -TimeoutSec 30
 
