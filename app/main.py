@@ -169,6 +169,10 @@ async def get_site_config():
             "base_url": config.API_BASE_URL,
             "default_model": config.DOC_DEFAULT_MODEL,
             "models": list(config.DOC_MODELS),
+            # 模型 → 供应商映射（后台「模型供应商映射」配置），未配置的模型不在其中。
+            # 单独成字段而非把 models 改成对象数组：脚本与前端都按字符串数组解析
+            # models，改动会波及所有已下发的客户端。
+            "model_vendors": dyn_settings.model_vendor_map(),
         },
         "features": {
             # 关掉后登录页不显示兑换码 Tab

@@ -36,6 +36,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import tempfile
 from collections.abc import Callable
 from typing import Any
@@ -209,6 +210,9 @@ SPECS: dict[str, tuple[str, str, Callable[[Any], Any], str]] = {
                      "示例代码里展示的 base_url"),
     "DOC_DEFAULT_MODEL": ("doc", "示例默认模型", _s(80, allow_empty=False), ""),
     "DOC_MODELS": ("doc", "展示模型清单", _str_list(), "逗号分隔"),
+    "MODEL_VENDORS": ("doc", "模型供应商映射", _str_list(),
+                      "格式「模型ID:供应商名」，逗号分隔，如 glm-5.2:智谱,deepseek-chat:DeepSeek；"
+                      "未配置的模型不显示供应商。网关的 owned_by 不可信（Claude 会被标成 openai），故自行维护"),
     "DOC_PRODUCTS": ("doc", "上架产品清单", _str_list(),
                      "逗号分隔的产品 id，留空 = 全部上架；填了不存在的 id 会在 /readyz 报错"),
     "DOC_VIDEO_WIN_URL": ("doc", "Windows 教程视频地址", _s(300),
@@ -308,6 +312,27 @@ def has_override(key: str) -> bool:
 
 def overrides() -> dict:
     return dict(_load())
+
+
+def model_vendor_map() -> dict[str, str]:
+    """「模型 ID → 供应商」映射，供前端展示厂商名。
+
+    源：MODEL_VENDORS 配置项（每项 "模型ID:供应商名"）。
+    解析失败/未配置 → 空字典，调用方按需回退（不显示供应商即可），不抛异常。
+    """
+    raw = get("MODEL_VENDORS", ())
+    if isinstance(raw, str):
+        raw = [p.strip() for p in raw.split(",") if p.strip()]
+    out: dict[str, str] = {}
+    for item in raw or ():
+        text = str(item).strip()
+        if ":" not in text and "：" not in text:
+            continue
+        model, vendor = re.split(r"[:：]", text, maxsplit=1)
+        model, vendor = model.strip(), vendor.strip()
+        if model and vendor:
+            out[model] = vendor
+    return out
 
 
 def invalidate() -> None:
