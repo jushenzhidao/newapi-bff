@@ -858,9 +858,11 @@ tbody tr:hover { background: #fafbfd; }
   color: var(--text-3); font-size: 14px;
 }
 
-/* 教程视频未配置时的占位 */
-.doc-video-empty {
-  aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center;
-  background: var(--bg); border: 1px dashed var(--border); border-radius: 10px;
-  color: var(--text-3); font-size: 14px;
+/* 「开启声音」：视频默认静音自动播放（浏览器只允许静音自动播），
+   用户点这个按钮才取消静音 —— 此时算用户交互，允许有声播放。 */
+.doc-video-sound {
+  margin-top: 8px; padding: 4px 14px; font-size: 12px; cursor: pointer;
+  color: var(--text-2); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 999px;
 }
+.doc-video-sound:hover { color: var(--text-1); border-color: var(--text-3); }
