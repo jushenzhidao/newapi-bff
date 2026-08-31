@@ -74,58 +74,41 @@ async function docCopy(id, btn) {
 }
 
 /* 教程视频：原生 <video>，零额外依赖。src 为空（后台未配视频地址）时渲染占位提示。 */
-/* 视频：懒加载 + 尽快开播（最多等 10 秒）+ 边播边缓冲。
+/* 视频：进入视口才预缓冲，用户点播放即秒开（不自动播放）。
  *
- * 三种需求分别对应三个手段：
- *   不阻塞首屏   → src 先放在 data-src，滚动进视口才真正加载（IntersectionObserver）
- *   尽快开播     → 预载后一旦 canplay 立刻播；10 秒兜底强制 play()，不等缓冲满
- *   自动播得起来 → 浏览器只允许「静音」自动播放，故默认 muted，另给「开启声音」按钮
- * 边播边缓冲是 <video> 的固有能力（HTTP Range 流式），无需额外处理。 */
-const DOC_VIDEO_MAX_WAIT_MS = 10000;
-
+ * 两个目标各用一个手段：
+ *   不阻塞首屏   → src 先放在 data-src，滚动进视口才开始预载（IntersectionObserver），
+ *                  隐藏 tab 里的视频完全不下载
+ *   点播即秒开   → 进视口后 preload="auto" 立即流式缓冲（HTTP Range），
+ *                  用户点 controls 的播放键时通常已经缓冲了一部分，几乎不用等
+ * 不自动播放：教程视频由用户自己决定何时看，自动播（尤其静音自动播）体验反而差。
+ * 封面图（v.poster）暂不渲染，yml 里的字段保留，需要时加回 video 标签即可。 */
 function docVideo(v) {
   if (!v) return "";
   const title = v.title ? `<div class="doc-video-cap">${esc(v.title)}</div>` : "";
   if (!v.src) {
     return `<div class="doc-video-wrap"><div class="doc-video-empty">教程视频准备中，敬请期待</div>${title}</div>`;
   }
-  // 封面图（v.poster）暂不渲染：yml 里的 poster 字段保留着，需要时把这一行
-  // 加回 video 标签即可，不用再动配置。
   return `<div class="doc-video-wrap">` +
-    `<video class="doc-video" controls muted playsinline preload="none"` +
-    ` data-src="${esc(v.src)}"></video>` +
-    `<button class="doc-video-sound" type="button" hidden>开启声音</button>${title}</div>`;
+    `<video class="doc-video" controls playsinline preload="none"` +
+    ` data-src="${esc(v.src)}"></video>${title}</div>`;
 }
 
-/* 渲染完成后调用：给页面上的视频挂上懒加载与自动开播逻辑。 */
+/* 渲染完成后调用：给页面上的视频挂上「进视口才预载」的逻辑。 */
 function initDocVideos() {
   const vids = document.querySelectorAll("video.doc-video[data-src]");
   if (!vids.length) return;
-
-  const tryPlay = (v) => {
-    const p = v.play();
-    // 自动播放被拒（部分浏览器策略更严）时静默失败：用户点了 controls 照样能播，
-    // 不弹错误、不打断页面。
-    if (p && typeof p.catch === "function") p.catch(() => {});
-  };
 
   const start = (v) => {
     if (v.dataset.started) return;
     v.dataset.started = "1";
     v.src = v.dataset.src;
     v.removeAttribute("data-src");
-    v.preload = "auto";                      // 立即开始流式缓冲
-    const btn = v.parentElement && v.parentElement.querySelector(".doc-video-sound");
-    if (btn) btn.hidden = false;
-
-    // 10 秒兜底：到点无论缓冲是否充足都开播（后续边播边缓冲）
-    const timer = setTimeout(() => tryPlay(v), DOC_VIDEO_MAX_WAIT_MS);
-    // 缓冲够了就立刻播，不必等满 10 秒
-    v.addEventListener("canplay", () => { clearTimeout(timer); tryPlay(v); }, { once: true });
+    v.preload = "auto";        // 立即开始流式缓冲，点播放时基本已就绪
     v.load();
   };
 
-  if (!("IntersectionObserver" in window)) {   // 老浏览器：直接全部加载
+  if (!("IntersectionObserver" in window)) {   // 老浏览器：直接全部预载
     vids.forEach(start);
     return;
   }
@@ -135,19 +118,8 @@ function initDocVideos() {
       io.unobserve(e.target);
       start(e.target);
     });
-  }, { rootMargin: "200px" });                  // 提前 200px 开始加载，滚到即播
+  }, { rootMargin: "200px" });                  // 提前 200px 开始预载
   vids.forEach((v) => io.observe(v));
-
-  // 「开启声音」：用户主动点击后取消静音（此时算用户交互，允许有声播放）
-  document.querySelectorAll(".doc-video-sound").forEach((btn) => {
-    btn.onclick = () => {
-      const v = btn.parentElement && btn.parentElement.querySelector("video");
-      if (!v) return;
-      v.muted = false;
-      tryPlay(v);
-      btn.hidden = true;
-    };
-  });
 }
 
 /* 把 fields 段里标记为 __USER_KEY__ 的占位，替换为登录用户最新的 API Key。
