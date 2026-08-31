@@ -229,6 +229,10 @@ try {
         throw 'API Key 不能为空。'
     }
 
+    # 模型 → 供应商映射容器，必须在拉站点配置**之前**初始化：
+    # 曾因放在配置拉取之后，把刚读到的映射清空，导致 vendor 恒为 Custom。
+    $modelVendors = @{}
+
     # 先拉站点配置：白名单模型 + 网关地址由管理员后台动态下发，失败保持内置兜底
     Write-Host '正在读取站点配置...' -ForegroundColor DarkGray
     try {
@@ -260,11 +264,9 @@ try {
 
     Write-Host ''
     Write-Host '正在读取可用模型列表...' -ForegroundColor DarkGray
-$modelIDs = $null
-$fetchModelError = $null
-# 模型 → 供应商映射：从站点配置填充（未配置则为空，vendor 一律写 'Custom'）
-$modelVendors = @{}
-try {
+    $modelIDs = $null
+    $fetchModelError = $null
+    try {
         Enable-Tls12
         $setupResponse = Invoke-RestMethod -UseBasicParsing -Method Get -Uri $setupEndpoint -Headers @{ Authorization = ('Bearer ' + $apiKey) } -TimeoutSec 30
 
