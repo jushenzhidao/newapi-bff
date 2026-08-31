@@ -135,6 +135,9 @@ function New-FixedModel {
         supportsImages = $SupportsImages
         supportsReasoning = $supportsReasoning
         useCustomProtocol = $useCustomProtocol
+        # 思考强度：默认全部开启（与客户端手动勾选的产出一致），
+        # 由用户在客户端自行选择具体档位；顺序按由低到高便于 UI 展示。
+        reasoning = [PSCustomObject][ordered]@{ supportedEfforts = $reasoningEfforts }
         maxInputTokens = $maxInputTokens
         maxOutputTokens = $maxOutputTokens
     }
@@ -294,6 +297,8 @@ try {
     $supportsToolCall = $true
     $supportsReasoning = $true
     $useCustomProtocol = $false
+    # 思考强度档位：由低到高全开，与客户端手动勾选「支持的思考强度」的产出一致
+    $reasoningEfforts = @('low', 'medium', 'high', 'xhigh', 'max')
     $maxInputTokens = 200000
     $maxOutputTokens = 65536
 

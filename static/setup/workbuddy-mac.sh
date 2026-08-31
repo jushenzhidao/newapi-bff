@@ -372,6 +372,8 @@ function run(argv) {
   const supportsToolCall = true;
   const supportsReasoning = true;
   const useCustomProtocol = false;
+  // 思考强度档位：由低到高全开，与客户端手动勾选「支持的思考强度」的产出一致
+  const reasoningEfforts = ['low', 'medium', 'high', 'xhigh', 'max'];
   const maxInputTokens = 200000;
   const maxOutputTokens = 65536;
   const imageCapabilities = readImageCapabilities(capabilitiesPath);
@@ -415,6 +417,7 @@ function run(argv) {
       supportsImages: supportsImages,
       supportsReasoning: supportsReasoning,
       useCustomProtocol: useCustomProtocol,
+      reasoning: { supportedEfforts: reasoningEfforts },
       maxInputTokens: maxInputTokens,
       maxOutputTokens: maxOutputTokens
     };
