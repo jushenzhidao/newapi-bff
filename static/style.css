@@ -846,6 +846,29 @@ tbody tr:hover { background: #fafbfd; }
 .doc-tab.active { background: var(--success); border-color: var(--success); color: #fff; }
 .doc-tab-panel { margin-top: 4px; }
 
+/* 步骤内「查看支持的模型」按钮 */
+.doc-btn {
+  display: inline-flex; align-items: center; gap: 6px; margin: 8px 0 4px;
+  padding: 7px 14px; font-size: 13px; font-weight: 600; color: #fff;
+  background: var(--primary); border: none; border-radius: 8px;
+  font-family: inherit; cursor: pointer; transition: background .15s;
+}
+.doc-btn:hover { background: var(--primary-hover); }
+
+/* 「支持的模型」弹窗内分组列表 */
+.doc-models-modal { max-height: 60vh; overflow-y: auto; margin: 4px 0 6px; }
+.doc-models-group { margin-bottom: 14px; }
+.doc-models-vendor {
+  font-size: 12.5px; font-weight: 700; color: var(--primary);
+  text-transform: uppercase; letter-spacing: .03em; margin-bottom: 6px;
+}
+.doc-models-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.doc-models-list li {
+  font-size: 12.5px; color: var(--text); background: var(--primary-soft);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px;
+  font-family: var(--mono); white-space: nowrap;
+}
+
 .doc-crumb { color: var(--text-3); font-size: 13px; margin-bottom: 6px; }
 .doc-crumb a { color: var(--text-2); text-decoration: none; }
 .doc-crumb a:hover { color: var(--primary); }

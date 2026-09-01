@@ -183,6 +183,7 @@ const SECTION = {
           <div class="step-body">
             <b>${esc(it.name)}</b>
             ${it.body ? docMd(it.body) : ""}
+            ${it.button ? `<button class="doc-btn" type="button" onclick="docShowModels('${esc(it.button.action || "")}')">${esc(it.button.label || "查看")}</button>` : ""}
             ${it.code ? docCode(it.code, it.lang) : ""}
             ${Array.isArray(it.fields) && it.fields.length ? `
               <div class="doc-fields">
@@ -335,6 +336,51 @@ function copyDocField(btn) {
     () => { const orig = btn.textContent; btn.textContent = "已复制"; setTimeout(() => { btn.textContent = orig; }, 1200); },
     () => { const orig = btn.textContent; btn.textContent = "复制失败"; setTimeout(() => { btn.textContent = orig; }, 1500); }
   );
+}
+
+/* 「查看支持的模型」：从 /api/config 取可配置模型清单与厂商映射，按厂商分组弹窗展示。
+ * action 目前仅 "models" 一种，保留参数便于以后扩展别的清单类型。
+ * 厂商排序沿用部署脚本约定：国外厂商（OpenAI、Anthropic）置顶，其余按出现顺序，Custom 永远最后。 */
+const _MODEL_VENDOR_PIN = ["OpenAI", "Anthropic"];
+async function docShowModels(action) {
+  let models = [], vendors = {};
+  try {
+    const r = await api("/api/config");
+    const apiCfg = (r && r.data && r.data.api) || {};
+    models = apiCfg.models || [];
+    vendors = apiCfg.model_vendors || {};
+  } catch (e) { /* 取失败则走空清单兜底 */ }
+
+  const groups = {};
+  const appearOrder = [];
+  for (const m of models) {
+    const v = vendors[m] || "Custom";
+    if (!groups[v]) { groups[v] = []; appearOrder.push(v); }
+    groups[v].push(m);
+  }
+
+  const order = [];
+  for (const p of _MODEL_VENDOR_PIN) if (groups[p]) order.push(p);
+  for (const v of appearOrder) if (!_MODEL_VENDOR_PIN.includes(v) && v !== "Custom") order.push(v);
+  if (groups["Custom"]) order.push("Custom");
+
+  const listHtml = order.length
+    ? order.map((v) => `
+        <div class="doc-models-group">
+          <div class="doc-models-vendor">${esc(v)}</div>
+          <ul class="doc-models-list">${
+            (groups[v] || []).map((m) => `<li>${esc(m)}</li>`).join("")
+          }</ul>
+        </div>`).join("")
+    : '<div class="muted">暂无可用模型</div>';
+
+  openModal(`
+    <h3>支持的模型</h3>
+    <div class="doc-models-modal">${listHtml}</div>
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="closeModal()">关闭</button>
+    </div>
+  `, { width: "520px" });
 }
 
 /* ---------- 积分消耗系数表 ---------- */

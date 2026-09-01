@@ -449,8 +449,34 @@ try {
     }
     Write-Host ''
     Write-Host '已配置模型：'
+    # 按供应商分组（保持 $modelIDs 出现顺序聚合；未配置的归 Custom）
+    # PowerShell 5.1+ 的普通 @{} 在 .Keys 枚举时按插入顺序遍历，足够稳定。
+    $groupedByVendor = @{}
     foreach ($modelID in $modelIDs) {
-        Write-Host ('  √ {0}' -f $modelID) -ForegroundColor Green
+        $vendorName = 'Custom'
+        if ($modelVendors.ContainsKey($modelID)) {
+            $mapped = ([string]$modelVendors[$modelID]).Trim()
+            if ($mapped) { $vendorName = $mapped }
+        }
+        if (-not $groupedByVendor.ContainsKey($vendorName)) {
+            $groupedByVendor[$vendorName] = New-Object System.Collections.Generic.List[string]
+        }
+        [void]$groupedByVendor[$vendorName].Add($modelID)
+    }
+    # 厂商展示顺序：国外厂商置顶（OpenAI/Anthropic），其余按出现顺序排后。按需增删。
+    $vendorPinOrder = @('OpenAI', 'Anthropic')
+    $orderedVendors = New-Object System.Collections.Generic.List[string]
+    foreach ($v in $vendorPinOrder) {
+        if ($groupedByVendor.ContainsKey($v)) { [void]$orderedVendors.Add($v) }
+    }
+    foreach ($v in $groupedByVendor.Keys) {
+        if ($orderedVendors -notcontains $v) { [void]$orderedVendors.Add($v) }
+    }
+    foreach ($vendorName in $orderedVendors) {
+        Write-Host ('  {0}:' -f $vendorName) -ForegroundColor DarkGray
+        foreach ($modelID in $groupedByVendor[$vendorName]) {
+            Write-Host ('    √ {0}' -f $modelID) -ForegroundColor Green
+        }
     }
     Write-Host ''
     Write-Host ('配置文件：{0}' -f $configFile)

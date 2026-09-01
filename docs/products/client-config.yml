@@ -74,6 +74,9 @@ sections:
                 image: "/static/images/workbuddy-manual-2-provider.webp"
               - name: "填入配置并保存"
                 body: "把下面 3 项信息填到对应字段后保存"
+                button:
+                  label: "查看支持的模型"
+                  action: "models"
                 fields:
                   - label: "接口地址"
                     value: "{{api_base}}"

@@ -463,7 +463,27 @@ function run(argv) {
   }
 
   writeUTF8(outputPath, JSON.stringify(root, null, 2) + '\n');
-  return (usedFallback ? 'FALLBACK|' : '') + modelIDs.join('、');
+  // 按供应商分组（保持 modelIDs 出现顺序聚合；未配置的归 Custom）
+  // 返回多行文本：每行 `<vendor>\t<model1,model2,...>`，bash 端按 tab 拆分组装。
+  const groupedByVendor = {};
+  modelIDs.forEach(function (modelID) {
+    const vendor = modelVendors[modelID] || 'Custom';
+    if (!groupedByVendor[vendor]) { groupedByVendor[vendor] = []; }
+    groupedByVendor[vendor].push(modelID);
+  });
+  // 厂商展示顺序：国外厂商置顶（OpenAI/Anthropic），其余按出现顺序排后。按需增删。
+  const vendorPinOrder = ['OpenAI', 'Anthropic'];
+  const orderedVendors = [];
+  vendorPinOrder.forEach(function (v) {
+    if (groupedByVendor[v]) { orderedVendors.push(v); }
+  });
+  Object.keys(groupedByVendor).forEach(function (v) {
+    if (orderedVendors.indexOf(v) === -1) { orderedVendors.push(v); }
+  });
+  const groupedText = orderedVendors.map(function (vendor) {
+    return vendor + '\t' + groupedByVendor[vendor].join(',');
+  }).join('\n');
+  return (usedFallback ? 'FALLBACK|' : '') + groupedText;
 }
 JXA
 
@@ -488,7 +508,12 @@ TEMP_CONFIG=""
 chmod 600 "${CONFIG_FILE}"
 
 printf '\n配置成功。\n'
-printf '模型：%s\n' "${INSTALLED_MODELS}"
+printf '模型分组：\n'
+while IFS=$'\t' read -r vendor models; do
+  if [ -n "${vendor}" ]; then
+    printf '  %s: %s\n' "${vendor}" "${models}"
+  fi
+done <<< "${INSTALLED_MODELS}"
 printf '文件：%s\n' "${CONFIG_FILE}"
 if [ -n "${BACKUP_FILE}" ]; then
   printf '备份：%s\n' "${BACKUP_FILE}"
