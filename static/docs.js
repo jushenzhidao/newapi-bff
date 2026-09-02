@@ -311,6 +311,15 @@ const SECTION = {
       ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
       ${docVideo(s)}
     </div>`,
+
+  /* WorkBuddy 一键配置链接：登录用户点按钮生成一次性链接，复制后粘贴到本机
+   * WorkBuddy 对话框即可自动配置自定义模型。交互逻辑在 docGenerateSetupLink。 */
+  workbuddy_setup: (s) => `
+    <div class="card">
+      ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
+      <div class="doc-prose">${docMd(s.body || "")}</div>
+      <button class="doc-btn" type="button" onclick="docGenerateSetupLink(this)">${esc(s.button_label || "生成配置链接")}</button>
+    </div>`,
 };
 
 function docTab(gid, idx, btn) {
@@ -381,6 +390,48 @@ async function docShowModels(action) {
       <button class="btn" type="button" onclick="closeModal()">关闭</button>
     </div>
   `, { width: "520px" });
+}
+
+/* 「生成 WorkBuddy 配置链接」：登录用户调 POST /api/setup/ticket 拿一次性链接，
+ * 弹窗展示 url + workbuddy:// deeplink 并支持复制。链接不含长期密钥，仅含一次性
+ * ticket（默认 10 分钟有效、单用即废）。未登录时 api 抛「未登录」，提示去登录。
+ * 注意：docCode 内部对 code 做了 esc（& -> &amp;），但 docCopy 取的是渲染后的
+ * innerText，复制出来仍是正确 &，无需额外处理。 */
+async function docGenerateSetupLink(btn) {
+  const old = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "生成中…"; }
+  try {
+    const r = await api("/api/setup/ticket", { method: "POST" });
+    const d = (r && r.data) || {};
+    const url = d.url || "";
+    const deeplink = d.deeplink || "";
+    const exp = d.expires_in || 600;
+    openModal(`
+      <h3>WorkBuddy 配置链接</h3>
+      <p class="muted">复制下面的链接，粘贴到你电脑上 WorkBuddy 的对话框并发送，即可自动完成模型配置，无需手动填写。</p>
+      ${url ? docCode(url, "配置链接") : ""}
+      ${deeplink ? docCode(deeplink, "一键拉起") : ""}
+      <div class="doc-note">链接有效期约 ${Math.round(exp / 60)} 分钟，且仅可使用一次，请尽快配置。</div>
+      <div class="modal-actions">
+        <button class="btn" type="button" onclick="closeModal()">关闭</button>
+      </div>
+    `, { width: "560px" });
+  } catch (e) {
+    const msg = (e && e.message) || "生成失败，请稍后重试";
+    const isLogin = /未登录|401|unauthorized/i.test(msg);
+    openModal(`
+      <h3>无法生成链接</h3>
+      <div class="doc-callout warn">
+        <b>${esc(isLogin ? "请先登录后再生成" : "生成失败")}</b>
+        <div>${esc(isLogin ? "生成配置链接需要登录账号，请先登录 BFF 再回来点击。" : msg)}</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" type="button" onclick="closeModal()">关闭</button>
+      </div>
+    `, { width: "480px" });
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = old; }
+  }
 }
 
 /* ---------- 积分消耗系数表 ---------- */

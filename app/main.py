@@ -36,9 +36,9 @@ import secrets
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -47,7 +47,15 @@ from . import config, docs_catalog, observability, pricing, promo, redeem_code, 
 from . import newapi_client as na
 from . import settings as dyn_settings
 from .newapi_client import NewApiError
-from .security import clear_session, is_admin, require_admin, require_session, set_session
+from .security import (
+    clear_session,
+    is_admin,
+    issue_setup_ticket,
+    open_setup_ticket,
+    require_admin,
+    require_session,
+    set_session,
+)
 
 logger = logging.getLogger("bff")
 logging.basicConfig(level=logging.INFO)
@@ -1253,6 +1261,102 @@ async def pay_return(request: Request):
 async def pay_return_console_log(request: Request):
     """兼容 new-api 旧版主题的回跳路径。"""
     return _pay_return_redirect(request)
+
+
+# ==================== WorkBuddy 一键配置（链接触发 + 确定性配置器）====================
+def _load_capabilities() -> dict:
+    """读 WorkBuddy 模型能力清单（图片输入），默认全部开启。
+
+    文件：static/setup/workbuddy-model-capabilities.txt，格式 `模型ID|true/false`，
+    `#` 开头为注释，查找键统一小写。未登记视为 true。
+    """
+    p = Path(__file__).resolve().parent.parent / "static" / "setup" / "workbuddy-model-capabilities.txt"
+    caps: dict[str, bool] = {}
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError:
+        return caps
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "|" not in line:
+            continue
+        mid, val = line.split("|", 1)
+        caps[mid.strip().lower()] = val.strip().lower() not in ("false", "0", "no")
+    return caps
+
+
+@app.post("/api/setup/ticket")
+async def issue_setup_ticket_endpoint(request: Request, session: dict = Depends(require_session)):
+    """签发 WorkBuddy 一键配置链接所需的 ticket。
+
+    仅登录用户可调用（防别人生成你的配置链接）。ticket 自包含 uid+pat、
+    短时效（10 分钟），返回的 url/deeplink 交给用户复制到 WorkBuddy 即可，
+    链接本身不含任何长期密钥。
+    """
+    bff_origin = str(request.base_url).rstrip("/")
+    ticket = issue_setup_ticket(session["uid"], session["pat"])
+    # bff 参数必须是 BFF 自身地址：WorkBuddy 用它调 GET {bff}/api/setup/export。
+    # 不能填上游网关 config.API_BASE_URL —— 否则 WorkBuddy 会去网关域调 export 而 404。
+    # export 内部调 new-api 用的是服务端配置的 NEWAPI_BASE_URL，不依赖这个参数。
+    bff = bff_origin
+    url = f"{bff_origin}/setup?t={ticket}&bff={quote(bff)}"
+    deeplink = f"workbuddy://import-models?bff={quote(bff)}&t={ticket}"
+    return ok({"ticket": ticket, "url": url, "deeplink": deeplink, "expires_in": 600})
+
+
+@app.get("/api/setup/export")
+async def export_models(ticket: str = Query(...)):
+    """导出当前用户可用的模型清单，供 WorkBuddy 确定性写入 models.json。
+
+    免登录：ticket 即凭证（内含 uid+pat）。所有白名单过滤 / vendor 映射 /
+    能力拼装都在服务端完成，WorkBuddy 只负责把返回的 models 写入本机文件，
+    不解析自然语言、不长期持有密钥。
+    """
+    sess = open_setup_ticket(ticket)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="配置链接无效或已过期，请重新生成")
+    uid, pat = sess["uid"], sess["pat"]
+
+    whitelist = list(config.DOC_MODELS)
+    vendor_map = dyn_settings.model_vendor_map()
+    base_url = config.API_BASE_URL
+    caps = _load_capabilities()
+
+    try:
+        body = await na.request("GET", "/v1/models", headers=na.user_headers(pat, uid))
+    except NewApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+
+    items = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(items, list):
+        items = []
+    ids = [m.get("id") for m in items if isinstance(m, dict) and m.get("id")]
+
+    def allowed(mid: str) -> bool:
+        if mid in whitelist:
+            return True
+        return any(mid.startswith(w) for w in whitelist)
+
+    filtered = [mid for mid in ids if allowed(mid)]
+    out = []
+    for mid in filtered:
+        out.append({
+            "id": mid,
+            "name": mid,
+            "vendor": vendor_map.get(mid, "Custom"),
+            "url": base_url,
+            "apiKey": pat,
+            "supportsToolCall": True,
+            "supportsImages": caps.get(mid.lower(), True),
+            "supportsReasoning": True,
+            "useCustomProtocol": False,
+            "reasoning": {"supportedEfforts": ["low", "medium", "high", "xhigh", "max"]},
+            "maxInputTokens": 200000,
+            "maxOutputTokens": 65536,
+        })
+    return ok({"models": out, "count": len(out), "base_url": base_url})
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

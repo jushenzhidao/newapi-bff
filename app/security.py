@@ -38,6 +38,7 @@ SECRET_KEY 在未来别处复用时产生密钥重合。
 import base64
 import json
 import os
+import secrets
 import time
 from typing import Optional
 
@@ -195,3 +196,60 @@ def require_admin(request: Request) -> dict:
     if not is_admin(session):
         raise HTTPException(status_code=403, detail="需要管理员权限")
     return session
+
+
+# ==================== 配置导出 ticket（自包含、短时效、无状态）====================
+# 与上面的会话 Cookie 完全独立：会话是 7 天、浏览器持有；ticket 是 10 分钟、链接持有。
+# ticket 内直接编码 uid + pat（new-api PAT），因此 export 端点**无需服务端存储**，
+# 也**无需依赖浏览器会话** —— WorkBuddy 拿 ticket 即可换配置，契合「链接丢给任意实例」。
+#
+# 安全权衡：ticket 解密即得 pat，等同短期 PAT。但 TTL 仅 10 分钟，且泄露危害远低于
+# 7 天会话 Cookie；若需更强约束（单用即废），启用 jti 校验即可（需服务端记录已用 jti）。
+_SETUP_SCHEME = b"v2t"
+_SETUP_TTL = 10 * 60  # 10 分钟
+
+
+def issue_setup_ticket(uid: int, pat: str, ttl: int = _SETUP_TTL) -> str:
+    """签发配置导出 ticket（自包含加密令牌）。
+
+    内含 uid + pat + exp + jti，无需服务端存储。复用会话同款 AES-256-GCM 设施，
+    但用独立 scheme 前缀（v2t）避免与 7 天会话 Cookie 的密文互串。
+    """
+    body = {
+        "uid": uid,
+        "pat": pat,
+        "exp": int(time.time()) + ttl,
+        "jti": secrets.token_hex(8),
+    }
+    plaintext = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    nonce = os.urandom(_NONCE_LEN)
+    ciphertext = AESGCM(_aes_key()).encrypt(nonce, plaintext, _SETUP_SCHEME)
+    return f"{_SETUP_SCHEME.decode()}.{_b64e(nonce)}.{_b64e(ciphertext)}"
+
+
+def open_setup_ticket(token: str) -> Optional[dict]:
+    """解 ticket，成功返回 {uid, pat}，失败（篡改/过期/畸形）返回 None。
+
+    None 对外一律按「链接无效或已过期」处理，不透露具体原因。
+    """
+    if not isinstance(token, str):
+        return None
+    try:
+        scheme, nonce_b64, ct_b64 = token.split(".", 2)
+    except ValueError:
+        return None
+    if scheme.encode() != _SETUP_SCHEME:
+        return None
+    try:
+        plaintext = AESGCM(_aes_key()).decrypt(_b64d(nonce_b64), _b64d(ct_b64), _SETUP_SCHEME)
+        body = json.loads(plaintext)
+    except (InvalidTag, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    exp = body.get("exp")
+    if not isinstance(exp, int) or time.time() > exp:
+        return None
+    if not all(k in body for k in ("uid", "pat")):
+        return None
+    return {"uid": body["uid"], "pat": body["pat"]}

@@ -88,3 +88,9 @@ sections:
                     value: "{{default_model}}"
                     copyable: true
                 image: "/static/images/workbuddy-manual-3-fill.webp"
+      - name: "配置链接（推荐）"
+        sections:
+          - type: workbuddy_setup
+            title: "WorkBuddy 一键配置"
+            body: "点击下方按钮生成你的专属配置链接，复制后粘贴到你电脑上 WorkBuddy 的对话框并发送，即可自动完成模型配置 —— 无需手动填写接口地址、Key 或模型名称。"
+            button_label: "生成配置链接"
