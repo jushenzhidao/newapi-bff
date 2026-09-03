@@ -50,6 +50,7 @@ from . import newapi_client as na
 from . import settings as dyn_settings
 from .newapi_client import NewApiError
 from .security import (
+    _SETUP_TTL,  # 导入配置链接 ticket 的 TTL（10 分钟）
     clear_session,
     is_admin,
     issue_setup_ticket,
@@ -58,7 +59,6 @@ from .security import (
     require_session,
     set_session,
 )
-from .security import _SETUP_TTL  # 导入配置链接 ticket 的 TTL（10 分钟）
 
 logger = logging.getLogger("bff")
 logging.basicConfig(level=logging.INFO)
