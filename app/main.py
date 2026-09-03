@@ -1301,8 +1301,12 @@ async def issue_setup_ticket_endpoint(request: Request, session: dict = Depends(
     # bff 参数必须是 BFF 自身地址：WorkBuddy 用它调 GET {bff}/api/setup/export。
     # 不能填上游网关 config.API_BASE_URL —— 否则 WorkBuddy 会去网关域调 export 而 404。
     # export 内部调 new-api 用的是服务端配置的 NEWAPI_BASE_URL，不依赖这个参数。
-    bff = bff_origin
-    url = f"{bff_origin}/setup?ticket={ticket}&bff={quote(bff)}"
+    #
+    # 强制 https：避免 WorkBuddy 从 http 调 export 时触发 nginx 301，
+    # 不同 HTTP 客户端对 30x 重定向的 query/method 保留行为有差异
+    # （部分客户端跟 301 后会丢 query 或改 method），直连 https 最稳。
+    bff = f"https://{urlparse(bff_origin).netloc}".rstrip("/")
+    url = f"{bff}/setup?ticket={ticket}&bff={quote(bff)}"
     deeplink = f"workbuddy://import-models?bff={quote(bff)}&ticket={ticket}"
     return ok({"ticket": ticket, "url": url, "deeplink": deeplink, "expires_in": 600})
 
