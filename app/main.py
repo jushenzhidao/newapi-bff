@@ -1512,8 +1512,8 @@ def _render_import_doc(api_key: str, bff_origin: str) -> str:
         '  "supportsReasoning": true,\n'
         '  "useCustomProtocol": false,\n'
         '  "reasoning": {"supportedEfforts": ["low","medium","high","xhigh","max"]},\n'
-        '  "maxInputTokens": <模型接口返回的上下文上限，取不到则省略>,\n'
-        '  "maxOutputTokens": <模型接口返回的回复上限，取不到则省略>\n'
+        '  "maxInputTokens": 262144,\n'
+        '  "maxOutputTokens": 65536\n'
         "}\n"
     )
     return (
