@@ -313,13 +313,22 @@ const SECTION = {
     </div>`,
 
   /* WorkBuddy 一键配置链接：登录用户点按钮生成一次性链接，复制后粘贴到本机
-   * WorkBuddy 对话框即可自动配置自定义模型。交互逻辑在 docGenerateSetupLink。 */
-  workbuddy_setup: (s) => `
-    <div class="card">
-      ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
-      <div class="doc-prose">${docMd(s.body || "")}</div>
-      <button class="doc-btn" type="button" onclick="docGenerateSetupLink(this)">${esc(s.button_label || "生成配置链接")}</button>
-    </div>`,
+   * WorkBuddy 对话框即可自动配置自定义模型。交互逻辑在 docGenerateSetupLink。
+   * 顶部加一个轻量 visibility/调试信息：若 future 改了 renderer 没注册函数，这里至少留个面板失败说明 */
+  workbuddy_setup: (s) => {
+    let body = "";
+    try { body = docMd(s.body || ""); }
+    catch (e) { body = `<div class="doc-callout warn">简介渲染失败：${esc(e.message || String(e))}</div>`; }
+    const btnLabel = (s && typeof s.button_label === "string" && s.button_label) ? s.button_label : "生成配置链接";
+    return `
+      <div class="card" data-workbuddy-setup="1">
+        ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
+        <div class="doc-prose">${body}</div>
+        <div style="margin-top:12px">
+          <button class="doc-btn" type="button" onclick="docGenerateSetupLink(this)">${esc(btnLabel)}</button>
+        </div>
+      </div>`;
+  },
 };
 
 function docTab(gid, idx, btn) {
@@ -409,8 +418,18 @@ async function docGenerateSetupLink(btn) {
     openModal(`
       <h3>WorkBuddy 配置链接</h3>
       <p class="muted">复制下面的链接，粘贴到你电脑上 WorkBuddy 的对话框并发送，即可自动完成模型配置，无需手动填写。</p>
-      ${url ? docCode(url, "配置链接") : ""}
-      ${deeplink ? docCode(deeplink, "一键拉起") : ""}
+      ${url ? `
+        <div class="doc-callout info" style="margin-bottom:8px">
+          <b>配置链接（推荐）</b>
+          <div>复制后粘贴到 WorkBuddy 对话框发送。适用于所有 WorkBuddy 版本。</div>
+        </div>
+        ${docCode(url, "配置链接")}` : ""}
+      ${deeplink ? `
+        <div class="doc-callout" style="margin-top:14px;margin-bottom:8px">
+          <b>一键拉起（可选）</b>
+          <div>仅当 WorkBuddy 已注册 <code>workbuddy://</code> 协议时，点击此链接会自动拉起 App 配置。普通对话粘贴请用上面的「配置链接」。</div>
+        </div>
+        ${docCode(deeplink, "一键拉起")}` : ""}
       <div class="doc-note">链接有效期约 ${Math.round(exp / 60)} 分钟，且仅可使用一次，请尽快配置。</div>
       <div class="modal-actions">
         <button class="btn" type="button" onclick="closeModal()">关闭</button>

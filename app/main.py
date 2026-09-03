@@ -36,6 +36,7 @@ import secrets
 import time
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Optional
 from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
@@ -1301,20 +1302,28 @@ async def issue_setup_ticket_endpoint(request: Request, session: dict = Depends(
     # 不能填上游网关 config.API_BASE_URL —— 否则 WorkBuddy 会去网关域调 export 而 404。
     # export 内部调 new-api 用的是服务端配置的 NEWAPI_BASE_URL，不依赖这个参数。
     bff = bff_origin
-    url = f"{bff_origin}/setup?t={ticket}&bff={quote(bff)}"
-    deeplink = f"workbuddy://import-models?bff={quote(bff)}&t={ticket}"
+    url = f"{bff_origin}/setup?ticket={ticket}&bff={quote(bff)}"
+    deeplink = f"workbuddy://import-models?bff={quote(bff)}&ticket={ticket}"
     return ok({"ticket": ticket, "url": url, "deeplink": deeplink, "expires_in": 600})
 
 
 @app.get("/api/setup/export")
-async def export_models(ticket: str = Query(...)):
+async def export_models(
+    ticket: Optional[str] = Query(None),
+    t: Optional[str] = Query(None),
+):
     """导出当前用户可用的模型清单，供 WorkBuddy 确定性写入 models.json。
 
     免登录：ticket 即凭证（内含 uid+pat）。所有白名单过滤 / vendor 映射 /
     能力拼装都在服务端完成，WorkBuddy 只负责把返回的 models 写入本机文件，
     不解析自然语言、不长期持有密钥。
+
+    参数：`ticket`（推荐，已生成链接默认走这个）或 `t`（alias，兼容早期链接）。
     """
-    sess = open_setup_ticket(ticket)
+    token = ticket or t
+    if not token:
+        raise HTTPException(status_code=422, detail="缺少 ticket 参数")
+    sess = open_setup_ticket(token)
     if sess is None:
         raise HTTPException(status_code=401, detail="配置链接无效或已过期，请重新生成")
     uid, pat = sess["uid"], sess["pat"]
