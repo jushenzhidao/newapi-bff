@@ -1313,22 +1313,22 @@ async def issue_setup_ticket_endpoint(request: Request, session: dict = Depends(
     return ok({"ticket": ticket, "url": url, "deeplink": deeplink, "expires_in": 600})
 
 
-async def _build_setup_models(pat: str, uid: Optional[int] = None) -> dict:
-    """用给定 PAT 调 new-api，拼装 WorkBuddy 可用的模型配置片段。
+async def _build_setup_models(pat: str) -> dict:
+    """用给定 PAT 调 new-api 的 /v1/models，拼装 WorkBuddy 可用的模型配置片段。
 
     白名单过滤 / vendor 映射 / 能力拼装都在这里完成，WorkBuddy 只负责写文件。
-    uid 缺失时先 GET /api/user/self 用 PAT 反查（from-pat 端点用户只给了 key）。
+
+    /v1/models 是 OpenAI 兼容的用户态端点：请求头带 ``Authorization: Bearer <PAT>``
+    即可，new-api 会自动从 token 解析出当前用户，**不需要**像 /api/token/、/api/user/amount
+    这类管理类接口那样额外带 ``New-Api-User`` 头，因此也不必先 GET /api/user/self 反查 uid。
     """
-    if uid is None:
-        self_body = await na.request("GET", "/api/user/self",
-                                    headers={"Authorization": f"Bearer {pat}"})
-        uid = int(self_body["data"]["id"])
     whitelist = list(config.DOC_MODELS)
     vendor_map = dyn_settings.model_vendor_map()
     base_url = config.API_BASE_URL
     caps = _load_capabilities()
 
-    body = await na.request("GET", "/v1/models", headers=na.user_headers(pat, uid))
+    body = await na.request("GET", "/v1/models",
+                            headers={"Authorization": f"Bearer {pat}"})
     items = body.get("data") if isinstance(body, dict) else None
     if not isinstance(items, list):
         items = []
@@ -1427,9 +1427,10 @@ async def import_doc_prepare_session(request: Request, session: dict = Depends(r
         raise HTTPException(status_code=401, detail="当前会话未携带 PAT，请重新登录")
     # 生成链接前先探活：new-api 的 PAT 会在「再次生成/复制令牌」时被覆盖作废，
     # 而 BFF 登录 cookie 不校验 PAT 是否存活，避免用户拿到一条必失败的链接。
-    uid = int(session.get("uid") or 0)
+    # 直接拿 PAT 调 /v1/models（OpenAI 兼容端点，Bearer 即可）验证是否还活着。
     try:
-        await na.get_self(pat, uid)
+        await na.request("GET", "/v1/models",
+                        headers={"Authorization": f"Bearer {pat}"})
     except NewApiError as e:
         if e.status_code in (401, 403):
             raise HTTPException(
@@ -1438,6 +1439,7 @@ async def import_doc_prepare_session(request: Request, session: dict = Depends(r
                        "请在 workbuddy.oneapis.cn 退出重新登录，再生成导入链接。",
             )
         raise
+    uid = int(session.get("uid") or 0)
     tok = issue_setup_ticket(uid, pat)
     origin = str(request.base_url).rstrip("/")
     link = f"{origin}/api/setup/import-doc?tok={tok}"
