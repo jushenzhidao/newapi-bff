@@ -457,7 +457,7 @@ async function docGenerateImportLink(btn) {
     const link = (r && r.data && r.data.link) || "";
     if (!link) throw new Error("服务端未返回链接");
     // 自然语言包裹：让 WorkBuddy 的 AI 主动 fetch 并按文档执行（不依赖原生链接协议）
-    const cmd = `读取我给你的链接对应的文档，按照文档执行 ${link}`;
+    const cmd = `读取链接的文档、执行 ${link}`;
     if (navigator.clipboard && window.isSecureContext) {
       try { await navigator.clipboard.writeText(cmd); } catch (_) { /* 复制失败不阻断，弹窗仍可手动复制 */ }
     }

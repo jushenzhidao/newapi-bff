@@ -16,7 +16,10 @@ from app import config, security
 from app.newapi_client import NewApiError
 
 _PAT = "sk-test-pat-for-import-doc-session-endpoint"
-_LIVE_KEY = "sk-live-default-key-abc123"
+# 故意用无 sk- 前缀的 raw key：模拟 new-api /api/token/{id}/key 直返的明文，
+# 验证 BFF 在 import-doc 渲染前会统一补 sk- 前缀（与教程页展示一致）。
+_LIVE_KEY = "DB6ROAFB8B3liDVE3HdCesqKBrSv3UEK87tCwoEXICdvy8DM"
+_LIVE_KEY_PREFIXED = f"sk-{_LIVE_KEY}"
 
 
 def _session_cookie():
@@ -64,18 +67,27 @@ def test_prep_session_round_trip(client, monkeypatch):
     # 链接本身绝不能含明文 PAT 或明文 Key（均加密在 tok 内）
     assert _PAT not in link
     assert _LIVE_KEY not in link
+    assert _LIVE_KEY_PREFIXED not in link
 
     tok = link.split("tok=", 1)[1]
     r2 = client.get("/api/setup/import-doc", params={"tok": tok})
     assert r2.status_code == 200, r2.text
     assert "text/markdown" in r2.headers.get("content-type", "")
     md = r2.text
-    # 文档必须把活 Key 和 /v1/models 地址给到 AI
-    assert _LIVE_KEY in md, "文档内必须含 API Key（AI 调 /v1/models 需 key）"
+    # 文档必须把活 Key（带 sk- 前缀）和 /v1/models 地址给到 AI
+    assert _LIVE_KEY_PREFIXED in md, "文档内必须含带 sk- 前缀的 API Key"
+    assert _LIVE_KEY not in md.replace(_LIVE_KEY_PREFIXED, ""), \
+        "文档里 raw key（无 sk-）不应裸存在，必须统一前缀"
     assert "/models" in md, "文档应引导 AI 调 /v1/models 拿模型"
     assert "models.json" in md, "文档应引导 AI 写本机 models.json"
     # 文档里的模型基地址应与 WorkBuddy 实际配置一致
     assert config.API_BASE_URL.rstrip("/") in md
+    # vendor 映射必须来自站点配置接口 /api/config，与 windows 脚本 lookup 逻辑一致
+    assert "/api/config" in md, "文档应引导 AI 调 /api/config 拿 model_vendors"
+    assert "model_vendors" in md, "文档应明确说明 vendor 取 model_vendors[id] || 'Custom'"
+    # 单模型格式严格按飞哥示例：不要 maxInputTokens / maxOutputTokens 等多余字段
+    assert "maxInputTokens" not in md
+    assert "maxOutputTokens" not in md
 
 
 def test_prep_session_tok_tampering_rejected(client, monkeypatch):
@@ -99,3 +111,28 @@ def test_prep_session_dead_key_rejected(client, monkeypatch):
     assert r.status_code == 401, r.text
     detail = r.json().get("detail", "")
     assert "重新登录" in detail
+
+
+def test_key_already_prefixed_not_double_prefixed(client, monkeypatch):
+    """new-api 已返回带 sk- 的 key → BFF 不能再补一遍前缀，避免 sk-sk- 双前缀。"""
+    from app import newapi_client as na_mod
+
+    async def fake_list(pat, uid, page=1, size=100):
+        return {"items": [{"id": 1, "name": "兑换码默认key"}]}
+
+    async def fake_key(pat, uid, token_id):
+        return "sk-already-has-prefix-xyz"
+
+    monkeypatch.setattr(na_mod, "list_tokens", fake_list)
+    monkeypatch.setattr(na_mod, "get_token_key", fake_key)
+
+    cookie = _session_cookie()
+    r = client.post(
+        "/api/setup/import-doc-prep-session",
+        cookies={"bff_session": cookie},
+    )
+    tok = r.json()["data"]["link"].split("tok=", 1)[1]
+    r2 = client.get("/api/setup/import-doc", params={"tok": tok})
+    md = r2.text
+    assert "sk-already-has-prefix-xyz" in md
+    assert "sk-sk-already-has-prefix-xyz" not in md, "不应重复加 sk- 前缀"

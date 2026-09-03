@@ -1427,7 +1427,10 @@ async def _get_default_api_key(session: dict) -> str:
     if not items:
         raise NewApiError("尚未创建任何 Key，请先在「Key 管理」生成一个", 404)
     target = next((t for t in items if t.get("name") == "兑换码默认key"), items[0])
-    return await na.get_token_key(pat, uid, target["id"])
+    key = await na.get_token_key(pat, uid, target["id"])
+    # 规范化：new-api 不同版本 /api/token/{id}/key 返回的 key 可能裸字符串，
+    # 也可能已带 sk- 前缀。统一保证前缀，避免 WorkBuddy 配置时缺前缀调不通。
+    return key if key.startswith("sk-") else f"sk-{key}"
 
 
 @app.post("/api/setup/import-doc-prep-session")
@@ -1457,28 +1460,32 @@ async def import_doc_prepare_session(request: Request, session: dict = Depends(r
     return ok({"link": link, "expires_in": _SETUP_TTL})
 
 
-def _render_import_doc(api_key: str) -> str:
+def _render_import_doc(api_key: str, bff_origin: str) -> str:
     """渲染 WorkBuddy 自助导入文档（markdown）。
 
-    AI 用其中的 Key 调 /v1/models 拿模型并写本机 models.json，
-    BFF 后端不代调 new-api，零 401 风险，也和教程页「复制 Key + 脚本」的已验证链路一致。
+    AI 用其中的 Key 调 /v1/models 拿模型列表，再调 /api/config 拿 model_vendors
+    （id → 供应商），合并写本机 models.json —— 与 windows 脚本
+    （static/setup/configure-workbuddy-models.sh）的 lookup 逻辑一致：
+    vendor 取 `modelVendors[id] || 'Custom'`。BFF 后端不代调 new-api，零 401 风险。
+
+    bff_origin：BFF 反代域 origin（不含路径），用于拼出 /api/config 的绝对 URL；
+    API_BASE_URL 走另一条路径（new-api 网关域，含 /v1）。
     """
-    base = config.API_BASE_URL.rstrip("/")
-    models_url = f"{base}/models"
+    api_base = config.API_BASE_URL.rstrip("/")
+    models_url = f"{api_base}/models"
+    config_url = f"{bff_origin.rstrip('/')}/api/config"
     json_example = (
         "{\n"
         '  "id": "<模型id>",\n'
         '  "name": "<模型id>",\n'
-        '  "vendor": "Custom",\n'
-        f'  "url": "{base}",\n'
+        '  "vendor": "<从 model_vendors[id] 查，未命中写 Custom>",\n'
+        f'  "url": "{api_base}",\n'
         f'  "apiKey": "{api_key}",\n'
         '  "supportsToolCall": true,\n'
         '  "supportsImages": true,\n'
         '  "supportsReasoning": true,\n'
         '  "useCustomProtocol": false,\n'
-        '  "reasoning": {"supportedEfforts": ["low","medium","high","xhigh","max"]},\n'
-        '  "maxInputTokens": 200000,\n'
-        '  "maxOutputTokens": 65536\n'
+        '  "reasoning": {"supportedEfforts": ["low","medium","high","xhigh","max"]}\n'
         "}\n"
     )
     return (
@@ -1490,22 +1497,25 @@ def _render_import_doc(api_key: str) -> str:
         "```\n"
         "该密钥仅用于调用模型接口与写入本机配置，请勿透露到对话外，写完即可丢弃。\n\n"
         "## 步骤\n"
-        f"1. 用上方密钥调用模型列表接口，拿到可用模型：`GET {models_url}`，"
+        f"1. 调站点配置接口拿「模型→供应商」映射：`GET {config_url}`，"
+        "解析 `data.api.model_vendors` 字段（对象：`{模型id: 供应商名}`，未配置即为空对象）。\n"
+        f"2. 用上方密钥调用模型列表接口：`GET {models_url}`，"
         "请求头加 `Authorization: Bearer <密钥>`。\n"
-        "2. 解析返回 JSON 的 `data` 数组，提取每个模型的 `id`。\n"
-        "3. 读取本机配置文件（Windows: `%USERPROFILE%\\.workbuddy\\models.json`；"
+        "3. 解析返回 JSON 的 `data` 数组，提取每个模型的 `id`。\n"
+        "4. 读取本机配置文件（Windows: `%USERPROFILE%\\.workbuddy\\models.json`；"
         "macOS/Linux: `~/.workbuddy/models.json`）；不存在则新建 `{\"models\":[]}`。\n"
-        "4. 为每个模型生成如下条目并合并进 `models` 数组（按 `id` 去重，已存在则覆盖）：\n"
+        "5. 为每个模型生成如下条目并合并进 `models` 数组（按 `id` 去重，已存在则覆盖），\n"
+        "其中 `vendor` 取 `modelVendors[<id>] || 'Custom'`：\n"
         "```json\n"
         f"{json_example}"
         "```\n"
-        "5. 原子写回原文件（先写临时文件再替换，避免半截写入）。\n"
-        "6. 提示用户：重启 WorkBuddy 后配置生效。\n"
+        "6. 原子写回原文件（先写临时文件再替换，避免半截写入）。\n"
+        "7. 提示用户：重启 WorkBuddy 后配置生效。\n"
     )
 
 
 @app.get("/api/setup/import-doc")
-async def import_doc(tok: str = Query(...)):
+async def import_doc(request: Request, tok: str = Query(...)):
     """动态生成 WorkBuddy 导入文档（markdown）。
 
     tok 由 import-doc-prep 签发（加密含 pat + 短时效）。解开拿到 pat 后用它调 new-api
@@ -1521,7 +1531,7 @@ async def import_doc(tok: str = Query(...)):
     # 直接交给 WorkBuddy 的 AI 自己去调 /v1/models 拿模型并写本机 models.json。
     # BFF 后端不再代调 new-api，零 401 风险，也和教程页「复制 Key + 脚本」的已验证链路一致。
     api_key = sess["pat"]
-    md = _render_import_doc(api_key)
+    md = _render_import_doc(api_key, str(request.base_url).rstrip("/"))
     return Response(
         content=md.encode("utf-8"),
         media_type="text/markdown; charset=utf-8",
@@ -1531,6 +1541,7 @@ async def import_doc(tok: str = Query(...)):
 
 @app.get("/api/setup/export")
 async def export_models(
+    request: Request,
     ticket: Optional[str] = Query(None),
     t: Optional[str] = Query(None),
 ):
@@ -1550,7 +1561,7 @@ async def export_models(
         raise HTTPException(status_code=401, detail="配置链接无效或已过期，请重新生成")
     # 复用与 import-doc 一致的「Key + AI 自取 /v1/models」文档模式，避免再拿 PAT 调 /v1/models。
     api_key = sess["pat"]
-    md = _render_import_doc(api_key)
+    md = _render_import_doc(api_key, str(request.base_url).rstrip("/"))
     return Response(
         content=md.encode("utf-8"),
         media_type="text/markdown; charset=utf-8",
