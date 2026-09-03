@@ -1,14 +1,14 @@
-"""端到端验证：从登录态 cookie 预生成导入链接 → fetch 拿动态 markdown → 端点不依赖 /api/setup/from-pat。
+"""端到端验证：登录态一键生成导入链接 → fetch 文档 → AI 自取 /v1/models 配置。
 
 链路：
-  1. 直接伪造一个加密的 session cookie（走 security._encrypt 加密 {uid, username, pat}）。
-  2. POST /api/setup/import-doc-prep-session → 期望 200 + 返回带 tok 的 link（不含明文 PAT）。
-     该端点生成链接前会先用 cookie 里的 PAT 调 /v1/models 探活（Bearer 即可），PAT 已死则直接 401。
-  3. GET  /api/setup/import-doc?tok=... → 期望 200 + text/markdown，且 JSON 内嵌 models。
-     _build_setup_models 抛 401 时返回清晰的 410 指引，而非透传 new-api 含糊文案。
+  1. 伪造加密 session cookie（uid/username/pat）。
+  2. POST /api/setup/import-doc-prep-session → 用 session 的 PAT 调 /api/token 取「默认 API Key」
+     （/api/token 列出、/api/token/{id}/key 取明文），加密进一次性 tok，返回链接。
+     注意：进 tok 的是**默认 API Key**（用于 /v1/models），不是 session 的 PAT——这是之前 401 的根因。
+  3. GET /api/setup/import-doc?tok=... → 直接渲染 markdown 文档（含 API Key + /v1/models 地址 +
+     写 models.json 步骤），**BFF 后端不再代调 new-api**，零 401 风险。
 
-本测试把「探活(/v1/models)」与「拼装(_build_setup_models)」两个 new-api 调用直接 monkeypatch，
-彻底不依赖网络与 mock 路由实现。
+本测试把「取 Key」两个 new-api 调用 monkeypatch 掉；import-doc 完全本地渲染，不触网。
 """
 import time
 
@@ -16,58 +16,38 @@ from app import config, security
 from app.newapi_client import NewApiError
 
 _PAT = "sk-test-pat-for-import-doc-session-endpoint"
+_LIVE_KEY = "sk-live-default-key-abc123"
 
 
 def _session_cookie():
-    """伪造一个 BFF 加密 cookie（字段顺序严格按 security 内部约定）。"""
     payload = {"uid": 7, "username": "tester", "pat": _PAT, "iat": int(time.time())}
     return security._encrypt(payload)
 
 
-def _patch_probe_and_build(monkeypatch, models, *, probe_fails=False):
-    """统一把「探活 /v1/models」与「拼装 _build_setup_models」两个调用 mock 掉。"""
-    from app import main as main_mod
+def _patch_token_lookup(monkeypatch, *, key_fails=False):
+    """mock 取默认 API Key 的两个 new-api 调用。"""
     from app import newapi_client as na_mod
 
-    async def fake_request(method, path, *, headers=None, json=None, params=None, client_ip=None):
-        if path == "/v1/models":
-            if probe_fails:
-                raise NewApiError("凭证已失效，请重新登录", 401)
-            return {"data": [{"id": "test-model-a"}]}
-        raise AssertionError(f"unexpected request {method} {path}")
+    async def fake_list(pat, uid, page=1, size=100):
+        return {"items": [{"id": 1, "name": "兑换码默认key"}]}
 
-    async def fake_build(pat):
-        assert pat == _PAT
-        return models
+    async def fake_key(pat, uid, token_id):
+        if key_fails:
+            raise NewApiError("凭证已失效，请重新登录", 401)
+        return _LIVE_KEY
 
-    monkeypatch.setattr(na_mod, "request", fake_request)
-    monkeypatch.setattr(main_mod, "_build_setup_models", fake_build)
+    monkeypatch.setattr(na_mod, "list_tokens", fake_list)
+    monkeypatch.setattr(na_mod, "get_token_key", fake_key)
 
 
 def test_prep_session_requires_login(client):
-    """无 cookie 必须 401（require_session 兜底）。"""
     r = client.post("/api/setup/import-doc-prep-session")
     assert r.status_code == 401, r.text
 
 
 def test_prep_session_round_trip(client, monkeypatch):
-    """登录态一键生成 → 返回链接不含明文 PAT → fetch 拿到含 JSON 的 markdown。"""
-    fake_models = [
-        {
-            "id": "test-model-a",
-            "name": "Test Model A",
-            "vendor": "Custom",
-            "baseUrl": config.NEWAPI_BASE_URL,
-            "apiKey": _PAT,
-            "capabilities": ["chat"],
-        }
-    ]
-    fake_resp = {
-        "models": fake_models,
-        "user": {"id": 7, "username": "tester"},
-        "vendors": {"test-model-a": "Custom"},
-    }
-    _patch_probe_and_build(monkeypatch, fake_resp)
+    """登录态一键生成 → 链接不含明文 Key → fetch 文档含 Key + /v1/models + 写文件步骤。"""
+    _patch_token_lookup(monkeypatch)
 
     cookie = _session_cookie()
     r = client.post(
@@ -80,27 +60,26 @@ def test_prep_session_round_trip(client, monkeypatch):
     link = body["data"]["link"]
     assert link.startswith("http")
     assert "/api/setup/import-doc?tok=" in link
-    assert "v2t." in link, "应当由 issue_setup_ticket 签发 v2t. 票"
-    assert _PAT not in link, "链接本身绝不能含明文 PAT"
+    assert "v2t." in link, "应由 issue_setup_ticket 签发 v2t. 票"
+    # 链接本身绝不能含明文 PAT 或明文 Key（均加密在 tok 内）
+    assert _PAT not in link
+    assert _LIVE_KEY not in link
 
     tok = link.split("tok=", 1)[1]
     r2 = client.get("/api/setup/import-doc", params={"tok": tok})
     assert r2.status_code == 200, r2.text
     assert "text/markdown" in r2.headers.get("content-type", "")
     md = r2.text
-    assert _PAT in md, "文档内必须含 apiKey（WorkBuddy 写 models.json 需 key）"
-    assert '"models"' in md
-    assert '"id": "test-model-a"' in md
-    assert f'"apiKey": "{_PAT}"' in md
+    # 文档必须把活 Key 和 /v1/models 地址给到 AI
+    assert _LIVE_KEY in md, "文档内必须含 API Key（AI 调 /v1/models 需 key）"
+    assert "/models" in md, "文档应引导 AI 调 /v1/models 拿模型"
+    assert "models.json" in md, "文档应引导 AI 写本机 models.json"
+    # 文档里的模型基地址应与 WorkBuddy 实际配置一致
+    assert config.API_BASE_URL.rstrip("/") in md
 
 
 def test_prep_session_tok_tampering_rejected(client, monkeypatch):
-    """tok 被篡改后必须 404，不能泄露 PAT。"""
-    _patch_probe_and_build(
-        monkeypatch,
-        {"models": [], "user": {"id": 0, "username": ""}, "vendors": {}},
-    )
-
+    _patch_token_lookup(monkeypatch)
     cookie = _session_cookie()
     r = client.post("/api/setup/import-doc-prep-session", cookies={"bff_session": cookie})
     tok = r.json()["data"]["link"].split("tok=", 1)[1]
@@ -109,15 +88,9 @@ def test_prep_session_tok_tampering_rejected(client, monkeypatch):
     assert r2.status_code == 404, r2.text
 
 
-def test_prep_session_dead_pat_rejected(client, monkeypatch):
-    """cookie 里的 PAT 在 new-api 端已死（探活 /v1/models 401）→ 端点直接 401 提示重登，
-    不再生成一条注定失败的链接。"""
-    _patch_probe_and_build(
-        monkeypatch,
-        {"models": [], "user": {"id": 0, "username": ""}, "vendors": {}},
-        probe_fails=True,
-    )
-
+def test_prep_session_dead_key_rejected(client, monkeypatch):
+    """取默认 Key 时 new-api 返回 401（PAT 失效）→ 端点直接 401 提示重登。"""
+    _patch_token_lookup(monkeypatch, key_fails=True)
     cookie = _session_cookie()
     r = client.post(
         "/api/setup/import-doc-prep-session",
@@ -125,36 +98,4 @@ def test_prep_session_dead_pat_rejected(client, monkeypatch):
     )
     assert r.status_code == 401, r.text
     detail = r.json().get("detail", "")
-    assert "失效" in detail
-    assert "重新登录" in detail
-
-
-def test_import_doc_dead_pat_clear_error(client, monkeypatch):
-    """探活通过（prep-session 成功），但 import-doc 拼装时 PAT 已死（_build_setup_models 抛 401）→
-    返回 410 + 清晰指引，而非透传 new-api 那句含糊的「凭证已失效」。"""
-    from app import main as main_mod
-    from app import newapi_client as na_mod
-
-    async def fake_request_ok(method, path, *, headers=None, json=None, params=None, client_ip=None):
-        if path == "/v1/models":
-            return {"data": [{"id": "test-model-a"}]}
-        raise AssertionError(f"unexpected request {method} {path}")
-
-    async def fake_build_dead(pat):
-        raise NewApiError("凭证已失效，请重新登录", 401)
-
-    monkeypatch.setattr(na_mod, "request", fake_request_ok)
-    monkeypatch.setattr(main_mod, "_build_setup_models", fake_build_dead)
-
-    cookie = _session_cookie()
-    r = client.post(
-        "/api/setup/import-doc-prep-session",
-        cookies={"bff_session": cookie},
-    )
-    assert r.status_code == 200, r.text
-    tok = r.json()["data"]["link"].split("tok=", 1)[1]
-    r2 = client.get("/api/setup/import-doc", params={"tok": tok})
-    assert r2.status_code == 410, r2.text
-    detail = r2.json().get("detail", "")
-    assert "失效" in detail
     assert "重新登录" in detail

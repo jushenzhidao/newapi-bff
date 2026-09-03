@@ -29,7 +29,6 @@ mock 模式（BFF_MOCK_MODE=1）：内存数据演示。
 """
 import contextlib
 import hashlib
-import json
 import logging
 import os
 import re
@@ -1411,39 +1410,98 @@ async def import_doc_prepare(body: SetupImportLinkBody, request: Request):
     return ok({"link": link, "expires_in": _SETUP_TTL})
 
 
+async def _get_default_api_key(session: dict) -> str:
+    """取当前用户「默认 API Key」明文。
+
+    用 session 的 PAT 调 /api/token 列出 Key，优先名为「兑换码默认key」的（redeem 时创建），
+    否则取列表第一个；再调 /api/token/{id}/key 取明文。这是 new-api 用于 /v1/models 的凭证，
+    与 session 里的 PAT 是两回事——之前拿 PAT 去调 /v1/models 才会 401。取 Key 走登录态的
+    /api/token/{id}/key，和教程页「复制 Key」是同一来源，已验证可用。
+    """
+    pat = session.get("pat") or ""
+    uid = int(session.get("uid") or 0)
+    if not pat:
+        raise NewApiError("会话未携带 PAT", 401)
+    d = await na.list_tokens(pat, uid)
+    items = d.get("items", []) if isinstance(d, dict) else []
+    if not items:
+        raise NewApiError("尚未创建任何 Key，请先在「Key 管理」生成一个", 404)
+    target = next((t for t in items if t.get("name") == "兑换码默认key"), items[0])
+    return await na.get_token_key(pat, uid, target["id"])
+
+
 @app.post("/api/setup/import-doc-prep-session")
 async def import_doc_prepare_session(request: Request, session: dict = Depends(require_session)):
-    """登录态一键预生成 WorkBuddy 导入链接：从当前会话的 cookie 拿 PAT，签发一次性 tok。
+    """登录态一键预生成 WorkBuddy 导入链接。
 
-    入口为浏览器里已经登录本平台的用户。零摩擦 — 不需要用户再去 new-api 复制 PAT、也不需要
-    在这里再粘贴一遍，直接点按钮就把链接生成并复制到剪贴板（自然语言包裹版）。然后粘到本机
-    WorkBuddy 即可。依旧走 issue_setup_ticket / open_setup_ticket（AES-GCM 无状态票据），
-    链接本身不含明文 PAT，TTL 同 _SETUP_TTL（10 分钟）。
+    入口为浏览器里已登录本平台的用户。零摩擦：直接点按钮即生成链接并复制（自然语言包裹版），
+    粘到本机 WorkBuddy 即可。依旧走 issue_setup_ticket / open_setup_ticket（AES-GCM 无状态票据），
+    链接本身不含明文密钥，TTL 同 _SETUP_TTL（10 分钟）。
 
-    未登录直接 401（require_session 兜底）。
+    关键：链接里加密的是用户「默认 API Key」（`/api/token` 创建的、用于调 /v1/models 的那种），
+    而不是 session 里的用户 PAT。/v1/models 只认 API Key、不认 PAT，这正是之前 401 的根因。
     """
-    pat = (session.get("pat") or "").strip()
-    if not pat:
-        raise HTTPException(status_code=401, detail="当前会话未携带 PAT，请重新登录")
-    # 生成链接前先探活：new-api 的 PAT 会在「再次生成/复制令牌」时被覆盖作废，
-    # 而 BFF 登录 cookie 不校验 PAT 是否存活，避免用户拿到一条必失败的链接。
-    # 直接拿 PAT 调 /v1/models（OpenAI 兼容端点，Bearer 即可）验证是否还活着。
     try:
-        await na.request("GET", "/v1/models",
-                        headers={"Authorization": f"Bearer {pat}"})
+        api_key = await _get_default_api_key(session)
     except NewApiError as e:
         if e.status_code in (401, 403):
             raise HTTPException(
                 status_code=401,
-                detail="登录会话里的访问令牌已失效（可能你在别处重新生成过令牌）。"
-                       "请在 workbuddy.oneapis.cn 退出重新登录，再生成导入链接。",
+                detail="登录已失效，请在 workbuddy.oneapis.cn 退出重新登录后再生成导入链接。",
             )
-        raise
+        raise HTTPException(status_code=400, detail=f"获取默认 Key 失败：{e}")
     uid = int(session.get("uid") or 0)
-    tok = issue_setup_ticket(uid, pat)
+    tok = issue_setup_ticket(uid, api_key)
     origin = str(request.base_url).rstrip("/")
     link = f"{origin}/api/setup/import-doc?tok={tok}"
     return ok({"link": link, "expires_in": _SETUP_TTL})
+
+
+def _render_import_doc(api_key: str) -> str:
+    """渲染 WorkBuddy 自助导入文档（markdown）。
+
+    AI 用其中的 Key 调 /v1/models 拿模型并写本机 models.json，
+    BFF 后端不代调 new-api，零 401 风险，也和教程页「复制 Key + 脚本」的已验证链路一致。
+    """
+    base = config.API_BASE_URL.rstrip("/")
+    models_url = f"{base}/models"
+    json_example = (
+        "{\n"
+        '  "id": "<模型id>",\n'
+        '  "name": "<模型id>",\n'
+        '  "vendor": "Custom",\n'
+        f'  "url": "{base}",\n'
+        f'  "apiKey": "{api_key}",\n'
+        '  "supportsToolCall": true,\n'
+        '  "supportsImages": true,\n'
+        '  "supportsReasoning": true,\n'
+        '  "useCustomProtocol": false,\n'
+        '  "reasoning": {"supportedEfforts": ["low","medium","high","xhigh","max"]},\n'
+        '  "maxInputTokens": 200000,\n'
+        '  "maxOutputTokens": 65536\n'
+        "}\n"
+    )
+    return (
+        "# WorkBuddy 自定义模型导入\n\n"
+        "你是 WorkBuddy 助手。请按以下自助步骤把模型配置写入本机，不要向我索要额外信息。\n\n"
+        "## 访问密钥（API Key）\n"
+        "```\n"
+        f"{api_key}\n"
+        "```\n"
+        "该密钥仅用于调用模型接口与写入本机配置，请勿透露到对话外，写完即可丢弃。\n\n"
+        "## 步骤\n"
+        f"1. 用上方密钥调用模型列表接口，拿到可用模型：`GET {models_url}`，"
+        "请求头加 `Authorization: Bearer <密钥>`。\n"
+        "2. 解析返回 JSON 的 `data` 数组，提取每个模型的 `id`。\n"
+        "3. 读取本机配置文件（Windows: `%USERPROFILE%\\.workbuddy\\models.json`；"
+        "macOS/Linux: `~/.workbuddy/models.json`）；不存在则新建 `{\"models\":[]}`。\n"
+        "4. 为每个模型生成如下条目并合并进 `models` 数组（按 `id` 去重，已存在则覆盖）：\n"
+        "```json\n"
+        f"{json_example}"
+        "```\n"
+        "5. 原子写回原文件（先写临时文件再替换，避免半截写入）。\n"
+        "6. 提示用户：重启 WorkBuddy 后配置生效。\n"
+    )
 
 
 @app.get("/api/setup/import-doc")
@@ -1459,36 +1517,11 @@ async def import_doc(tok: str = Query(...)):
     sess = open_setup_ticket(tok)
     if not sess:
         raise HTTPException(status_code=404, detail="链接无效或已过期，请重新生成")
-    pat = sess["pat"]
-    try:
-        result = await _build_setup_models(pat)
-    except NewApiError as e:
-        if e.status_code in (401, 403):
-            # PAT 在 new-api 端已死（被再次生成令牌覆盖 / 过期）。给清晰指引，
-            # 不要原样透传 new-api 那句含糊的「凭证已失效，请重新登录」。
-            raise HTTPException(
-                status_code=410,
-                detail="链接内的访问令牌已失效（可能在别处重新生成过令牌）。"
-                       "请在 workbuddy.oneapis.cn 重新登录，再重新生成导入链接。",
-            )
-        raise HTTPException(status_code=e.status_code, detail=str(e))
-    models = result["models"]
-    data_json = json.dumps({"models": models}, ensure_ascii=False, indent=2)
-    md = (
-        "# WorkBuddy 自定义模型导入\n\n"
-        "你是 WorkBuddy 助手。请按以下步骤把模型配置写入本机，不要向我索要额外信息。\n\n"
-        "1. 读取下方「模型配置数据」中的 JSON。\n"
-        "2. 读取本机配置文件（Windows: `%USERPROFILE%\\.workbuddy\\models.json`；"
-        "macOS/Linux: `~/.workbuddy/models.json`）。\n"
-        "3. 将 JSON 的 `models` 数组合并进该文件的 `models` 数组：按 `id` 去重，已存在的覆盖。\n"
-        "4. 原子写回原文件（先写临时文件再替换，避免半截写入）。\n"
-        "5. 提示用户：重启 WorkBuddy 后配置生效。\n\n"
-        "## 模型配置数据\n"
-        "```json\n"
-        f"{data_json}\n"
-        "```\n\n"
-        "注意：以上数据已包含访问密钥，请勿透露到对话外，写完即可丢弃。\n"
-    )
+    # tok 里存的是「默认 API Key」（prep-session 用 _get_default_api_key 取的），
+    # 直接交给 WorkBuddy 的 AI 自己去调 /v1/models 拿模型并写本机 models.json。
+    # BFF 后端不再代调 new-api，零 401 风险，也和教程页「复制 Key + 脚本」的已验证链路一致。
+    api_key = sess["pat"]
+    md = _render_import_doc(api_key)
     return Response(
         content=md.encode("utf-8"),
         media_type="text/markdown; charset=utf-8",
@@ -1515,11 +1548,14 @@ async def export_models(
     sess = open_setup_ticket(token)
     if sess is None:
         raise HTTPException(status_code=401, detail="配置链接无效或已过期，请重新生成")
-    try:
-        result = await _build_setup_models(sess["pat"], sess["uid"])
-    except NewApiError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
-    return ok(result)
+    # 复用与 import-doc 一致的「Key + AI 自取 /v1/models」文档模式，避免再拿 PAT 调 /v1/models。
+    api_key = sess["pat"]
+    md = _render_import_doc(api_key)
+    return Response(
+        content=md.encode("utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
