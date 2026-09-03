@@ -29,6 +29,7 @@ mock 模式（BFF_MOCK_MODE=1）：内存数据演示。
 """
 import contextlib
 import hashlib
+import json
 import logging
 import os
 import re
@@ -57,6 +58,7 @@ from .security import (
     require_session,
     set_session,
 )
+from .security import _SETUP_TTL  # 导入配置链接 ticket 的 TTL（10 分钟）
 
 logger = logging.getLogger("bff")
 logging.basicConfig(level=logging.INFO)
@@ -1311,37 +1313,22 @@ async def issue_setup_ticket_endpoint(request: Request, session: dict = Depends(
     return ok({"ticket": ticket, "url": url, "deeplink": deeplink, "expires_in": 600})
 
 
-@app.get("/api/setup/export")
-async def export_models(
-    ticket: Optional[str] = Query(None),
-    t: Optional[str] = Query(None),
-):
-    """导出当前用户可用的模型清单，供 WorkBuddy 确定性写入 models.json。
+async def _build_setup_models(pat: str, uid: Optional[int] = None) -> dict:
+    """用给定 PAT 调 new-api，拼装 WorkBuddy 可用的模型配置片段。
 
-    免登录：ticket 即凭证（内含 uid+pat）。所有白名单过滤 / vendor 映射 /
-    能力拼装都在服务端完成，WorkBuddy 只负责把返回的 models 写入本机文件，
-    不解析自然语言、不长期持有密钥。
-
-    参数：`ticket`（推荐，已生成链接默认走这个）或 `t`（alias，兼容早期链接）。
+    白名单过滤 / vendor 映射 / 能力拼装都在这里完成，WorkBuddy 只负责写文件。
+    uid 缺失时先 GET /api/user/self 用 PAT 反查（from-pat 端点用户只给了 key）。
     """
-    token = ticket or t
-    if not token:
-        raise HTTPException(status_code=422, detail="缺少 ticket 参数")
-    sess = open_setup_ticket(token)
-    if sess is None:
-        raise HTTPException(status_code=401, detail="配置链接无效或已过期，请重新生成")
-    uid, pat = sess["uid"], sess["pat"]
-
+    if uid is None:
+        self_body = await na.request("GET", "/api/user/self",
+                                    headers={"Authorization": f"Bearer {pat}"})
+        uid = int(self_body["data"]["id"])
     whitelist = list(config.DOC_MODELS)
     vendor_map = dyn_settings.model_vendor_map()
     base_url = config.API_BASE_URL
     caps = _load_capabilities()
 
-    try:
-        body = await na.request("GET", "/v1/models", headers=na.user_headers(pat, uid))
-    except NewApiError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
-
+    body = await na.request("GET", "/v1/models", headers=na.user_headers(pat, uid))
     items = body.get("data") if isinstance(body, dict) else None
     if not isinstance(items, list):
         items = []
@@ -1369,7 +1356,127 @@ async def export_models(
             "maxInputTokens": 200000,
             "maxOutputTokens": 65536,
         })
-    return ok({"models": out, "count": len(out), "base_url": base_url})
+    return {"models": out, "count": len(out), "base_url": base_url}
+
+
+class SetupPatBody(BaseModel):
+    pat: str
+
+
+@app.post("/api/setup/from-pat")
+async def setup_from_pat(body: SetupPatBody):
+    """用用户当场粘贴的 PAT 拼装 WorkBuddy 模型配置（方式 2）。
+
+    与 /api/setup/export（ticket 方案）相比：不依赖 BFF 登录态、也不依赖 cookie
+    里的 PAT。PAT 是 new-api 的瞬时钥匙，长期持有会被强刷覆盖导致 401；让用户从
+    new-api 官方前端复制最新 PAT 当场粘贴，钥匙永远是新鲜的。BFF 收到后只做一次性
+    查询与拼装，不持久化。返回结构等同 /api/setup/export，供 WorkBuddy skill 直接写盘。
+    """
+    pat = body.pat.strip()
+    if not pat:
+        raise HTTPException(status_code=400, detail="缺少 PAT（api key）")
+    try:
+        result = await _build_setup_models(pat)
+    except NewApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    return ok(result)
+
+
+# ==================== WorkBuddy 一键配置：链接触发（Y 档，无明文密钥）====================
+# 用户粘贴 PAT → 平台调 prep 端点把 PAT 加密进一次性 tok（无状态、10 分钟有效）→
+# 返回链接 https://<origin>/api/setup/import-doc?tok=...（链接本身不含明文 PAT）。
+# 用户把链接用自然语言包裹（如「读取我给你的链接对应的文档，按照文档执行 <链接>」）
+# 发给本机 WorkBuddy；WorkBuddy 的 AI fetch 该链接 → BFF 解开 tok 拿 PAT → 调 new-api
+# 拼装模型清单 → 内联进一篇 markdown「执行说明书」返回。AI 按文档直接写本机
+# %USERPROFILE%\.workbuddy\models.json，全程零登录态、零 skill 预装、链接不含密钥。
+# 复用 issue_setup_ticket / open_setup_ticket（AES-GCM 无状态票据，TTL=_SETUP_TTL=10min）。
+class SetupImportLinkBody(BaseModel):
+    pat: str
+
+
+@app.post("/api/setup/import-doc-prep")
+async def import_doc_prepare(body: SetupImportLinkBody, request: Request):
+    """预生成 WorkBuddy 导入链接：把 PAT 加密进一次性 tok，返回不含明文密钥的链接。
+
+    不依赖登录态（用户给的是 new-api PAT，不是 BFF 会话）。返回的链接 10 分钟内有效、
+    且泄露危害等同短期票据（不含明文 PAT）。
+    """
+    pat = body.pat.strip()
+    if not pat:
+        raise HTTPException(status_code=400, detail="缺少 PAT（api key）")
+    # uid 固定 0：import-doc 端点只取 pat，不需要 uid 语义
+    tok = issue_setup_ticket(0, pat)
+    origin = str(request.base_url).rstrip("/")
+    link = f"{origin}/api/setup/import-doc?tok={tok}"
+    return ok({"link": link, "expires_in": _SETUP_TTL})
+
+
+@app.get("/api/setup/import-doc")
+async def import_doc(tok: str = Query(...)):
+    """动态生成 WorkBuddy 导入文档（markdown）。
+
+    tok 由 import-doc-prep 签发（加密含 pat + 短时效）。解开拿到 pat 后用它调 new-api
+    拼装模型清单，内联进一篇 markdown「执行说明书」返回。WorkBuddy 的 AI fetch 此链接
+    即得完整导入指令 + 数据，无需再发 HTTP、无需 skill 预装。
+
+    失败（tok 篡改/过期/畸形）→ 404，不透露原因。
+    """
+    sess = open_setup_ticket(tok)
+    if not sess:
+        raise HTTPException(status_code=404, detail="链接无效或已过期，请重新生成")
+    pat = sess["pat"]
+    try:
+        result = await _build_setup_models(pat)
+    except NewApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    models = result["models"]
+    data_json = json.dumps({"models": models}, ensure_ascii=False, indent=2)
+    md = (
+        "# WorkBuddy 自定义模型导入\n\n"
+        "你是 WorkBuddy 助手。请按以下步骤把模型配置写入本机，不要向我索要额外信息。\n\n"
+        "1. 读取下方「模型配置数据」中的 JSON。\n"
+        "2. 读取本机配置文件（Windows: `%USERPROFILE%\\.workbuddy\\models.json`；"
+        "macOS/Linux: `~/.workbuddy/models.json`）。\n"
+        "3. 将 JSON 的 `models` 数组合并进该文件的 `models` 数组：按 `id` 去重，已存在的覆盖。\n"
+        "4. 原子写回原文件（先写临时文件再替换，避免半截写入）。\n"
+        "5. 提示用户：重启 WorkBuddy 后配置生效。\n\n"
+        "## 模型配置数据\n"
+        "```json\n"
+        f"{data_json}\n"
+        "```\n\n"
+        "注意：以上数据已包含访问密钥，请勿透露到对话外，写完即可丢弃。\n"
+    )
+    return Response(
+        content=md.encode("utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/setup/export")
+async def export_models(
+    ticket: Optional[str] = Query(None),
+    t: Optional[str] = Query(None),
+):
+    """导出当前用户可用的模型清单，供 WorkBuddy 确定性写入 models.json。
+
+    免登录：ticket 即凭证（内含 uid+pat）。所有白名单过滤 / vendor 映射 /
+    能力拼装都在服务端完成，WorkBuddy 只负责把返回的 models 写入本机文件，
+    不解析自然语言、不长期持有密钥。
+
+    参数：`ticket`（推荐，已生成链接默认走这个）或 `t`（alias，兼容早期链接）。
+    """
+    token = ticket or t
+    if not token:
+        raise HTTPException(status_code=422, detail="缺少 ticket 参数")
+    sess = open_setup_ticket(token)
+    if sess is None:
+        raise HTTPException(status_code=401, detail="配置链接无效或已过期，请重新生成")
+    try:
+        result = await _build_setup_models(sess["pat"], sess["uid"])
+    except NewApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    return ok(result)
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

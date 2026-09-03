@@ -312,21 +312,35 @@ const SECTION = {
       ${docVideo(s)}
     </div>`,
 
-  /* WorkBuddy 一键配置链接：登录用户点按钮生成一次性链接，复制后粘贴到本机
-   * WorkBuddy 对话框即可自动配置自定义模型。交互逻辑在 docGenerateSetupLink。
-   * 顶部加一个轻量 visibility/调试信息：若 future 改了 renderer 没注册函数，这里至少留个面板失败说明 */
+  /* WorkBuddy 自定义模型导入（Y 档：链接触发，链接不含明文密钥）。
+   * 用户在输入框粘贴自己的 new-api PAT，点按钮即调本平台 /api/setup/import-doc-prep
+   * 把 PAT 加密进一次性 tok、返回形如 https://<origin>/api/setup/import-doc?tok=... 的链接
+   * （链接本身不含明文密钥）。平台再把链接用自然语言包裹（「读取我给你的链接对应的文档，
+   * 按照文档执行 <链接>」），复制到剪贴板。用户把这段粘贴到本机 WorkBuddy 新建对话发送，
+   * WorkBuddy 的 AI 会 fetch 该链接拿到自包含的导入文档并直接写本机 models.json。
+   * 全程零登录态、零 skill 预装、链接不含密钥。备选路径（details 折叠）仍保留纯指令生成。 */
   workbuddy_setup: (s) => {
     let body = "";
     try { body = docMd(s.body || ""); }
     catch (e) { body = `<div class="doc-callout warn">简介渲染失败：${esc(e.message || String(e))}</div>`; }
-    const btnLabel = (s && typeof s.button_label === "string" && s.button_label) ? s.button_label : "生成配置链接";
+    const btnLabel = (s && typeof s.button_label === "string" && s.button_label) ? s.button_label : "生成导入链接并复制";
     return `
       <div class="card" data-workbuddy-setup="1">
         ${s.title ? `<div class="card-title">${esc(s.title)}</div>` : ""}
         <div class="doc-prose">${body}</div>
-        <div style="margin-top:12px">
-          <button class="doc-btn" type="button" onclick="docGenerateSetupLink(this)">${esc(btnLabel)}</button>
+        <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px">
+          <label class="doc-field-label" for="wb-setup-pat">你的 new-api 访问令牌（PAT）</label>
+          <input id="wb-setup-pat" class="doc-setup-pat" type="text" placeholder="sk-..." autocomplete="off" spellcheck="false"
+                 style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--hp-border,#333);background:var(--hp-bg-input,#161616);color:inherit;font-family:ui-monospace,SFMono-Regular,Menlo,monospace" />
+          <button class="doc-btn doc-btn-primary" type="button" onclick="docGenerateImportLink(this)">${esc(btnLabel)}</button>
         </div>
+        <details style="margin-top:4px">
+          <summary style="cursor:pointer;color:var(--hp-link,#4aa3ff);font-size:13px">或者生成纯文本导入指令（不依赖链接）</summary>
+          <div style="margin-top:10px">
+            <button class="doc-btn" type="button" onclick="docGenerateImportCommand(this)">生成导入指令并复制</button>
+          </div>
+        </details>
+        <div class="doc-note" style="margin-top:8px">PAT 仅在你的浏览器本地参与加密，不会以明文出现在本平台任何地方；生成的导入链接本身也不含明文密钥，可放心复制给本机 WorkBuddy。</div>
       </div>`;
   },
 };
@@ -401,52 +415,96 @@ async function docShowModels(action) {
   `, { width: "520px" });
 }
 
-/* 「生成 WorkBuddy 配置链接」：登录用户调 POST /api/setup/ticket 拿一次性链接，
- * 弹窗展示 url + workbuddy:// deeplink 并支持复制。链接不含长期密钥，仅含一次性
- * ticket（默认 10 分钟有效、单用即废）。未登录时 api 抛「未登录」，提示去登录。
- * 注意：docCode 内部对 code 做了 esc（& -> &amp;），但 docCopy 取的是渲染后的
- * innerText，复制出来仍是正确 &，无需额外处理。 */
-async function docGenerateSetupLink(btn) {
+/* 「生成 WorkBuddy 导入链接」（Y 档 / 链接触发）：调本平台 /api/setup/import-doc-prep
+ * 把用户 PAT 加密进一次性 tok，返回不含明文密钥的链接；再把链接用自然语言包裹
+ * （「读取我给你的链接对应的文档，按照文档执行 <链接>」），复制到剪贴板并弹窗展示。
+ * 用户把这段粘贴到本机 WorkBuddy 新建对话发送，AI 会自动 fetch 链接、按返回的文档
+ * 直接写本机 models.json。全程零登录态、零 skill 预装、链接不含明文密钥。 */
+async function docGenerateImportLink(btn) {
+  const card = btn ? btn.closest(".card") : null;
+  const input = card ? card.querySelector("input.doc-setup-pat") : null;
+  const pat = (input && input.value || "").trim();
+  if (!pat) {
+    if (input) { input.focus(); input.style.borderColor = "#e0533d"; }
+    openModal(`
+      <h3>缺少 PAT</h3>
+      <div class="doc-callout warn">请先在上方输入框粘贴你的 new-api 访问令牌（PAT），再点生成。PAT 可在 new-api 官方前端的「个人设置 → 系统访问令牌」处复制。</div>
+      <div class="modal-actions"><button class="btn" type="button" onclick="closeModal()">关闭</button></div>
+    `, { width: "480px" });
+    return;
+  }
   const old = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.textContent = "生成中…"; }
   try {
-    const r = await api("/api/setup/ticket", { method: "POST" });
-    const d = (r && r.data) || {};
-    const url = d.url || "";
-    const deeplink = d.deeplink || "";
-    const exp = d.expires_in || 600;
+    const r = await api("/api/setup/import-doc-prep", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pat }),
+    });
+    const link = (r && r.data && r.data.link) || "";
+    if (!link) throw new Error("服务端未返回链接");
+    // 自然语言包裹：让 WorkBuddy 的 AI 主动 fetch 并按文档执行（不依赖原生链接协议）
+    const cmd = `读取我给你的链接对应的文档，按照文档执行 ${link}`;
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(cmd); } catch (_) { /* 复制失败不阻断，弹窗仍可手动复制 */ }
+    }
     openModal(`
-      <h3>WorkBuddy 配置链接</h3>
-      <p class="muted">复制下面的链接，粘贴到你电脑上 WorkBuddy 的对话框并发送，即可自动完成模型配置，无需手动填写。</p>
-      ${url ? `
-        <div class="doc-callout info" style="margin-bottom:8px">
-          <b>配置链接（推荐）</b>
-          <div>复制后粘贴到 WorkBuddy 对话框发送。适用于所有 WorkBuddy 版本。</div>
-        </div>
-        ${docCode(url, "配置链接")}` : ""}
-      ${deeplink ? `
-        <div class="doc-callout" style="margin-top:14px;margin-bottom:8px">
-          <b>一键拉起（可选）</b>
-          <div>仅当 WorkBuddy 已注册 <code>workbuddy://</code> 协议时，点击此链接会自动拉起 App 配置。普通对话粘贴请用上面的「配置链接」。</div>
-        </div>
-        ${docCode(deeplink, "一键拉起")}` : ""}
-      <div class="doc-note">链接有效期约 ${Math.round(exp / 60)} 分钟，且仅可使用一次，请尽快配置。</div>
-      <div class="modal-actions">
-        <button class="btn" type="button" onclick="closeModal()">关闭</button>
-      </div>
-    `, { width: "560px" });
+      <h3>WorkBuddy 导入链接已生成</h3>
+      <p class="muted">下面这段已复制到剪贴板。打开你电脑上的 WorkBuddy，新建对话并粘贴发送，AI 会自动读取链接文档并完成模型配置 —— 全程无需安装任何组件、无需手动填 Key。</p>
+      ${docCode(cmd, "导入指令")}
+      <div class="doc-note">链接本身不含明文密钥（PAT 已加密进一次性令牌，10 分钟内有效），可放心复制。若担心泄露，在 new-api 前端重新生成令牌即可使旧链接失效。</div>
+      <div class="modal-actions"><button class="btn" type="button" onclick="closeModal()">关闭</button></div>
+    `, { width: "640px" });
   } catch (e) {
     const msg = (e && e.message) || "生成失败，请稍后重试";
-    const isLogin = /未登录|401|unauthorized/i.test(msg);
     openModal(`
-      <h3>无法生成链接</h3>
-      <div class="doc-callout warn">
-        <b>${esc(isLogin ? "请先登录后再生成" : "生成失败")}</b>
-        <div>${esc(isLogin ? "生成配置链接需要登录账号，请先登录 BFF 再回来点击。" : msg)}</div>
-      </div>
-      <div class="modal-actions">
-        <button class="btn" type="button" onclick="closeModal()">关闭</button>
-      </div>
+      <h3>生成失败</h3>
+      <div class="doc-callout warn">${esc(/未登录|401|unauthorized/i.test(msg) ? "请先登录后再生成" : msg)}</div>
+      <div class="modal-actions"><button class="btn" type="button" onclick="closeModal()">关闭</button></div>
+    `, { width: "480px" });
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = old; }
+  }
+}
+
+/* 「生成 WorkBuddy 导入指令」（from-pat）：纯前端拼接，不调后端。
+ * 取同一卡片内输入框的 PAT，拼成 `apikey:<PAT> 去读 <本站 origin>/api/setup/from-pat 写配置`，
+ * 复制到剪贴板并弹窗展示。用户拿这条指令丢进本机 WorkBuddy 即可自动完成模型配置。
+ * 全程不发任何请求到本平台（PAT 只在本地输入框参与拼接），安全且零依赖登录态。 */
+async function docGenerateImportCommand(btn) {
+  const card = btn ? btn.closest(".card") : null;
+  const input = card ? card.querySelector("input.doc-setup-pat") : null;
+  const pat = (input && input.value || "").trim();
+  if (!pat) {
+    if (input) { input.focus(); input.style.borderColor = "#e0533d"; }
+    openModal(`
+      <h3>缺少 PAT</h3>
+      <div class="doc-callout warn">请先在上方输入框粘贴你的 new-api 访问令牌（PAT），再点生成。PAT 可在 new-api 官方前端的「个人设置 → 系统访问令牌」处复制。</div>
+      <div class="modal-actions"><button class="btn" type="button" onclick="closeModal()">关闭</button></div>
+    `, { width: "480px" });
+    return;
+  }
+  // 用当前站点 origin，自动适配任意部署域名（from-pat 端点就在这个 origin 上）
+  const origin = location.origin;
+  const cmd = `apikey:${pat} 去读 ${origin}/api/setup/from-pat 写配置`;
+  const old = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "已生成"; }
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(cmd); } catch (_) { /* 复制失败不阻断，弹窗仍可手动复制 */ }
+    }
+    openModal(`
+      <h3>WorkBuddy 导入指令</h3>
+      <p class="muted">下面这条指令已复制到剪贴板。打开你电脑上的 WorkBuddy，新建对话并粘贴发送，即可自动完成模型配置。</p>
+      ${docCode(cmd, "导入指令")}
+      <div class="doc-note">PAT 是你账户的访问令牌，请勿转发给他人。若担心泄露，可在 new-api 前端重新生成令牌使旧令牌失效。</div>
+      <div class="modal-actions"><button class="btn" type="button" onclick="closeModal()">关闭</button></div>
+    `, { width: "600px" });
+  } catch (e) {
+    openModal(`
+      <h3>生成失败</h3>
+      <div class="doc-callout warn">${esc((e && e.message) || "生成失败，请稍后重试")}</div>
+      <div class="modal-actions"><button class="btn" type="button" onclick="closeModal()">关闭</button></div>
     `, { width: "480px" });
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = old; }
