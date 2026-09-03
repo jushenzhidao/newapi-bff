@@ -1425,7 +1425,20 @@ async def import_doc_prepare_session(request: Request, session: dict = Depends(r
     pat = (session.get("pat") or "").strip()
     if not pat:
         raise HTTPException(status_code=401, detail="当前会话未携带 PAT，请重新登录")
-    tok = issue_setup_ticket(int(session.get("uid") or 0), pat)
+    # 生成链接前先探活：new-api 的 PAT 会在「再次生成/复制令牌」时被覆盖作废，
+    # 而 BFF 登录 cookie 不校验 PAT 是否存活，避免用户拿到一条必失败的链接。
+    uid = int(session.get("uid") or 0)
+    try:
+        await na.get_self(pat, uid)
+    except NewApiError as e:
+        if e.status_code in (401, 403):
+            raise HTTPException(
+                status_code=401,
+                detail="登录会话里的访问令牌已失效（可能你在别处重新生成过令牌）。"
+                       "请在 workbuddy.oneapis.cn 退出重新登录，再生成导入链接。",
+            )
+        raise
+    tok = issue_setup_ticket(uid, pat)
     origin = str(request.base_url).rstrip("/")
     link = f"{origin}/api/setup/import-doc?tok={tok}"
     return ok({"link": link, "expires_in": _SETUP_TTL})
@@ -1448,6 +1461,14 @@ async def import_doc(tok: str = Query(...)):
     try:
         result = await _build_setup_models(pat)
     except NewApiError as e:
+        if e.status_code in (401, 403):
+            # PAT 在 new-api 端已死（被再次生成令牌覆盖 / 过期）。给清晰指引，
+            # 不要原样透传 new-api 那句含糊的「凭证已失效，请重新登录」。
+            raise HTTPException(
+                status_code=410,
+                detail="链接内的访问令牌已失效（可能在别处重新生成过令牌）。"
+                       "请在 workbuddy.oneapis.cn 重新登录，再重新生成导入链接。",
+            )
         raise HTTPException(status_code=e.status_code, detail=str(e))
     models = result["models"]
     data_json = json.dumps({"models": models}, ensure_ascii=False, indent=2)
