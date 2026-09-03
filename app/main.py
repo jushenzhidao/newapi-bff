@@ -1535,7 +1535,7 @@ def _render_import_doc(api_key: str, bff_origin: str) -> str:
         f"  -H \"Authorization: Bearer {api_key}\"\n"
         "```\n"
         "3. 解析第 2 步返回 JSON 的 `data` 数组，提取每个模型的 `id`。\n"
-        "4. **先定位本机 WorkBuddy 模型配置文件model.json的真实路径**"
+        "4. **先定位本机 WorkBuddy 模型配置文件models.json的真实路径**"
         "   定位到文件后读取它，并判断它的「根形态」：\n"
         "   - 文件不存在（刚新建的 `[]`） → 形态 = **顶层数组**。\n"
         "   - 根是 JSON 数组 → 形态 = **顶层数组**，整份文件就是模型列表。\n"
