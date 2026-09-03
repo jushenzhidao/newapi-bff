@@ -1184,7 +1184,17 @@ def _site_origin(request: Request) -> str:
     http://app:8000，而用户看到的是 https://workbuddy.oneapis.cn —— 所以优先
     取 X-Forwarded-*（Host 才是用户实际输入的域名，Proto 决定 http/https）。
     两个头都缺时回退 starlette 的 base_url（裸跑场景）。
+
+    SETUP_PUBLIC_ORIGIN 是最高优先级兜底：当反代未正确透传 X-Forwarded-Proto
+    （TLS 在 nginx 终结、但没带 `proxy_set_header X-Forwarded-Proto $scheme;`）
+    时，request.url.scheme 会退化成 http，生成的导入链接就变成了 http://... 而非
+    https://...。部署方在 compose / .env 里显式写死
+    SETUP_PUBLIC_ORIGIN=https://workbuddy.oneapis.cn 即可 100% 锁定 https，
+    不再依赖反代头的配置正确性。
     """
+    env = (os.getenv("SETUP_PUBLIC_ORIGIN") or "").strip().rstrip("/")
+    if env:
+        return env
     host = (request.headers.get("x-forwarded-host")
             or request.headers.get("host") or "").strip()
     proto = (request.headers.get("x-forwarded-proto", "")
@@ -1455,7 +1465,7 @@ async def import_doc_prepare_session(request: Request, session: dict = Depends(r
         raise HTTPException(status_code=400, detail=f"获取默认 Key 失败：{e}")
     uid = int(session.get("uid") or 0)
     tok = issue_setup_ticket(uid, api_key)
-    origin = str(request.base_url).rstrip("/")
+    origin = _site_origin(request)
     link = f"{origin}/api/setup/import-doc?tok={tok}"
     return ok({"link": link, "expires_in": _SETUP_TTL})
 
@@ -1548,7 +1558,7 @@ async def import_doc(request: Request, tok: str = Query(...)):
     # 直接交给 WorkBuddy 的 AI 自己去调 /v1/models 拿模型并写本机 models.json。
     # BFF 后端不再代调 new-api，零 401 风险，也和教程页「复制 Key + 脚本」的已验证链路一致。
     api_key = sess["pat"]
-    md = _render_import_doc(api_key, str(request.base_url).rstrip("/"))
+    md = _render_import_doc(api_key, _site_origin(request))
     return Response(
         content=md.encode("utf-8"),
         media_type="text/markdown; charset=utf-8",
@@ -1578,7 +1588,7 @@ async def export_models(
         raise HTTPException(status_code=401, detail="配置链接无效或已过期，请重新生成")
     # 复用与 import-doc 一致的「Key + AI 自取 /v1/models」文档模式，避免再拿 PAT 调 /v1/models。
     api_key = sess["pat"]
-    md = _render_import_doc(api_key, str(request.base_url).rstrip("/"))
+    md = _render_import_doc(api_key, _site_origin(request))
     return Response(
         content=md.encode("utf-8"),
         media_type="text/markdown; charset=utf-8",
