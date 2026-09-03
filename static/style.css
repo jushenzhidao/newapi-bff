@@ -851,7 +851,7 @@ tbody tr:hover { background: #fafbfd; }
   display: inline-flex; align-items: center; gap: 6px; margin: 8px 0 4px;
   padding: 7px 14px; font-size: 13px; font-weight: 600; color: #fff;
   background: var(--primary); border: none; border-radius: 8px;
-  font-family: inherit; cursor: pointer; transition: background .15s;
+  font-family: inherit; cursor: pointer; transition: background .15s;width: fit-content;
 }
 .doc-btn:hover { background: var(--primary-hover); }
 

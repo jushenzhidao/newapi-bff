@@ -332,16 +332,16 @@ const SECTION = {
           <div class="doc-note">已登录用户免粘贴：平台直接用你的当前会话生成。链接 10 分钟内有效，链接本身不含明文密钥。</div>
         </div>
         <details style="margin-top:10px">
-          <summary style="cursor:pointer;color:var(--hp-link,#4aa3ff);font-size:13px">未登录/无 cookie？手填 PAT 再生成</summary>
+          <summary style="cursor:pointer;color:var(--hp-link,#4aa3ff);font-size:13px">未登录/无 cookie？手填 API Key 再生成</summary>
           <div style="margin-top:10px;display:flex;flex-direction:column;gap:10px">
-            <label class="doc-field-label" for="wb-setup-pat">你的 new-api 访问令牌（PAT）</label>
+            <label class="doc-field-label" for="wb-setup-pat">你的 API Key</label>
             <input id="wb-setup-pat" class="doc-setup-pat" type="text" placeholder="sk-..." autocomplete="off" spellcheck="false"
-                   style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--hp-border,#333);background:var(--hp-bg-input,#161616);color:inherit;font-family:ui-monospace,SFMono-Regular,Menlo,monospace" />
-            <button class="doc-btn" type="button" onclick="docGenerateImportLink(this)" data-mode="pat">用填写的 PAT 生成导入链接</button>
+                   style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--hp-border,#333);background:var(--hp-bg-input,#eee);color:inherit;font-family:ui-monospace,SFMono-Regular,Menlo,monospace" />
+            <button class="doc-btn" type="button" onclick="docGenerateImportLink(this)" data-mode="pat">用填写的 API Key 生成导入链接</button>
           </div>
         </details>
         <details style="margin-top:6px">
-          <summary style="cursor:pointer;color:var(--hp-link,#4aa3ff);font-size:13px">以上都不行？生成纯文本导入指令（PAT 会明文嵌入指令）</summary>
+          <summary style="cursor:pointer;color:var(--hp-link,#4aa3ff);font-size:13px">以上都不行？生成纯文本导入指令（API Key 会明文嵌入指令）</summary>
           <div style="margin-top:10px">
             <button class="doc-btn" type="button" onclick="docGenerateImportCommand(this)">生成纯文本导入指令并复制</button>
           </div>
