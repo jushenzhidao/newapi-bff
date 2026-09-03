@@ -1178,30 +1178,46 @@ _SETUP_DIR = STATIC_DIR / "setup"
 
 
 def _site_origin(request: Request) -> str:
-    """当前用户访问 BFF 的实际 origin（含协议）。
+    """当前用户访问 BFF 的实际 origin（含协议），默认**动态**获取、绝不写死。
 
-    容器前通常有反向代理（Ingress / nginx），此时 request.url 是容器内的
-    http://app:8000，而用户看到的是 https://workbuddy.oneapis.cn —— 所以优先
-    取 X-Forwarded-*（Host 才是用户实际输入的域名，Proto 决定 http/https）。
-    两个头都缺时回退 starlette 的 base_url（裸跑场景）。
+    换域名部署自动适配，无需改任何配置：
+    - host：优先 X-Forwarded-Host，回退 Host 头（反代通常原样转发用户实际域名）
+    - proto：优先 X-Forwarded-Proto；反代未透传该头时，按「是否公网标准域名」
+      推断：公网域名（如 workbuddy.oneapis.cn，端口 443/无端口）默认 https，
+      本地裸跑（localhost / 内网 IP / 显式非 443 端口）回落 http，避免误判。
 
-    SETUP_PUBLIC_ORIGIN 是最高优先级兜底：当反代未正确透传 X-Forwarded-Proto
-    （TLS 在 nginx 终结、但没带 `proxy_set_header X-Forwarded-Proto $scheme;`）
-    时，request.url.scheme 会退化成 http，生成的导入链接就变成了 http://... 而非
-    https://...。部署方在 compose / .env 里显式写死
-    SETUP_PUBLIC_ORIGIN=https://workbuddy.oneapis.cn 即可 100% 锁定 https，
-    不再依赖反代头的配置正确性。
+    SETUP_PUBLIC_ORIGIN 仅作极端兜底（反代连 Host 头都没正确透传时），
+    正常部署**留空即可**自动适配域名与协议，不要写死具体域名。
     """
     env = (os.getenv("SETUP_PUBLIC_ORIGIN") or "").strip().rstrip("/")
     if env:
         return env
     host = (request.headers.get("x-forwarded-host")
             or request.headers.get("host") or "").strip()
+    if not host:
+        return str(request.base_url).rstrip("/")
     proto = (request.headers.get("x-forwarded-proto", "")
-             .split(",")[0].strip() or request.url.scheme)
-    if host:
-        return f"{proto}://{host}".rstrip("/")
-    return str(request.base_url).rstrip("/")
+             .split(",")[0].strip())
+    if not proto:
+        proto = "https" if _looks_public(host) else request.url.scheme
+    return f"{proto}://{host}".rstrip("/")
+
+
+def _looks_public(host: str) -> bool:
+    """粗略判断 host 是否像「公网标准 https 域名」，用于反代未透传协议时兜底。
+
+    localhost / 127.0.0.1 / ::1 / 裸 IPv4 一律视为本地（http）；
+    显式带非 443 端口（如 :8081 测试容器）也视为非标准 https，回落 http。
+    """
+    name, _, port = host.partition(":")
+    name = name.strip().lower()
+    if not name or name in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):  # noqa: S104
+        return False
+    if name.replace(".", "").isdigit():  # 裸 IPv4，如 192.168.1.10
+        return False
+    if port and port not in ("443",):
+        return False
+    return True
 
 
 @app.get("/setup/{filename}")
