@@ -1511,7 +1511,9 @@ def _render_import_doc(api_key: str, bff_origin: str) -> str:
         '  "supportsImages": true,\n'
         '  "supportsReasoning": true,\n'
         '  "useCustomProtocol": false,\n'
-        '  "reasoning": {"supportedEfforts": ["low","medium","high","xhigh","max"]}\n'
+        '  "reasoning": {"supportedEfforts": ["low","medium","high","xhigh","max"]},\n'
+        '  "maxInputTokens": <模型接口返回的上下文上限，取不到则省略>,\n'
+        '  "maxOutputTokens": <模型接口返回的回复上限，取不到则省略>\n'
         "}\n"
     )
     return (
@@ -1549,7 +1551,9 @@ def _render_import_doc(api_key: str, bff_origin: str) -> str:
         "   - 根是 JSON 对象且 `.models` 是数组 → 形态 = **{models:[]}**，用 `.models` 字段。\n"
         "   - 根是 JSON 对象且 `.models` 不存在或不是数组 → 不要直接覆盖；"
         "把根原样收成 `custom` 字段，新建 `models` 数组（避免破坏自定义设置）。\n"
-        "5. 为每个模型生成如下条目（其中 `vendor` 取 `modelVendors[<id>] || 'Custom'`）：\n"
+        "5. 为每个模型生成如下条目（`vendor` 取 `modelVendors[<id>] || 'Custom'`；"
+        "`maxInputTokens`/`maxOutputTokens` 从模型接口返回的上下文/回复长度上限取真实值，"
+        "取不到则省略该字段，不要写 0）：\n"
         "```json\n"
         f"{json_example}"
         "```\n"

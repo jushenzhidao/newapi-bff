@@ -85,9 +85,10 @@ def test_prep_session_round_trip(client, monkeypatch):
     # vendor 映射必须来自站点配置接口 /api/config，与 windows 脚本 lookup 逻辑一致
     assert "/api/config" in md, "文档应引导 AI 调 /api/config 拿 model_vendors"
     assert "model_vendors" in md, "文档应明确说明 vendor 取 model_vendors[id] || 'Custom'"
-    # 单模型格式严格按飞哥示例：不要 maxInputTokens / maxOutputTokens 等多余字段
-    assert "maxInputTokens" not in md
-    assert "maxOutputTokens" not in md
+    # 单模型格式（飞哥要求保留）：必须包含 maxInputTokens / maxOutputTokens 字段，
+    # AI 从模型接口取真实上下文/回复上限，取不到则省略（不写 0）。
+    assert "maxInputTokens" in md
+    assert "maxOutputTokens" in md
     # 文件格式识别步骤必须写出（兼容顶层数组 / {models:[]} / 自定义对象三种形态）
     assert "顶层数组" in md, "文档应列出「顶层数组」形态（飞哥本机用的就是这种）"
     assert "{models:[]}" in md or '"models":[]' in md, "文档应列出「对象里含 models」形态"
