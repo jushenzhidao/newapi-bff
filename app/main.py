@@ -1411,6 +1411,26 @@ async def import_doc_prepare(body: SetupImportLinkBody, request: Request):
     return ok({"link": link, "expires_in": _SETUP_TTL})
 
 
+@app.post("/api/setup/import-doc-prep-session")
+async def import_doc_prepare_session(request: Request, session: dict = Depends(require_session)):
+    """登录态一键预生成 WorkBuddy 导入链接：从当前会话的 cookie 拿 PAT，签发一次性 tok。
+
+    入口为浏览器里已经登录本平台的用户。零摩擦 — 不需要用户再去 new-api 复制 PAT、也不需要
+    在这里再粘贴一遍，直接点按钮就把链接生成并复制到剪贴板（自然语言包裹版）。然后粘到本机
+    WorkBuddy 即可。依旧走 issue_setup_ticket / open_setup_ticket（AES-GCM 无状态票据），
+    链接本身不含明文 PAT，TTL 同 _SETUP_TTL（10 分钟）。
+
+    未登录直接 401（require_session 兜底）。
+    """
+    pat = (session.get("pat") or "").strip()
+    if not pat:
+        raise HTTPException(status_code=401, detail="当前会话未携带 PAT，请重新登录")
+    tok = issue_setup_ticket(int(session.get("uid") or 0), pat)
+    origin = str(request.base_url).rstrip("/")
+    link = f"{origin}/api/setup/import-doc?tok={tok}"
+    return ok({"link": link, "expires_in": _SETUP_TTL})
+
+
 @app.get("/api/setup/import-doc")
 async def import_doc(tok: str = Query(...)):
     """动态生成 WorkBuddy 导入文档（markdown）。

@@ -92,5 +92,5 @@ sections:
         sections:
           - type: workbuddy_setup
             title: "WorkBuddy 一键配置"
-            body: "在下方粘贴你的 new-api 访问令牌（PAT），点击按钮即可生成一条 WorkBuddy 导入指令并自动复制。打开你电脑上的 WorkBuddy，新建对话粘贴发送，即可自动完成模型配置 —— 无需手动填写接口地址、Key 或模型名称。"
-            button_label: "生成导入指令并复制"
+            body: "你在本平台已登录，点击下方按钮即可一键生成 WorkBuddy 导入指令并复制。打开你电脑上的 WorkBuddy，新建对话粘贴发送，即可自动完成模型配置 —— 无需手动填写接口地址、Key 或模型名称，全程不需要再去 new-api 复制密钥。"
+            button_label: "一键生成导入指令并复制"
