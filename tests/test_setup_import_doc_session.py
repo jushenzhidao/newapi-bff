@@ -92,9 +92,11 @@ def test_prep_session_round_trip(client, monkeypatch):
     # 文件格式识别步骤必须写出（兼容顶层数组 / {models:[]} / 自定义对象三种形态）
     assert "顶层数组" in md, "文档应列出「顶层数组」形态（飞哥本机用的就是这种）"
     assert "{models:[]}" in md or '"models":[]' in md, "文档应列出「对象里含 models」形态"
-    # 跨平台：文档必须引导 AI 先探测本机真实路径，不假设固定路径
-    assert "Test-Path" in md and "ls ~/.workbuddy" in md, \
-        "文档应引导 AI 在 Windows/macOS 分别探测 models.json 真实路径"
+    # 跨平台：文档必须引导 AI 先定位本机真实路径，不假设固定路径。
+    # 飞哥精简版用「先定位本机 WorkBuddy 模型配置文件models.json的真实路径」一句话覆盖，
+    # 不再写死 Test-Path / ls 命令，故只校验「真实路径」语义关键字。
+    assert "真实路径" in md, \
+        "文档应引导 AI 先定位本机 models.json 真实路径，不假设固定路径"
 
 
 def test_prep_session_tok_tampering_rejected(client, monkeypatch):
