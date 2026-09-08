@@ -82,8 +82,12 @@ def test_prep_session_round_trip(client, monkeypatch):
     assert "models.json" in md, "文档应引导 AI 写本机 models.json"
     # 文档里的模型基地址应与 WorkBuddy 实际配置一致
     assert config.API_BASE_URL.rstrip("/") in md
-    # vendor 映射必须来自站点配置接口 /api/config，与 windows 脚本 lookup 逻辑一致
-    assert "/api/config" in md, "文档应引导 AI 调 /api/config 拿 model_vendors"
+    # 交集语义（与 windows 脚本一致）：文档必须内联「展示模型清单」白名单，
+    # 并引导 AI 按白名单前缀过滤 /v1/models 结果，只安装「网关可用 ∩ 展示清单」。
+    assert "白名单" in md, "文档应内联管理员展示模型清单白名单并引导 AI 做交集过滤"
+    assert "前缀" in md, "文档应说明白名单按前缀匹配（容纳 gpt-4o-2024-11-20 这类版本后缀）"
+    # 站点配置接口地址仍保留为可选的核对来源（非必须请求）
+    assert "/api/config" in md, "站点配置接口应作为可核对来源保留在文档里"
     assert "model_vendors" in md, "文档应明确说明 vendor 取 model_vendors[id] || 'Custom'"
     # 单模型格式（飞哥要求保留）：必须包含 maxInputTokens / maxOutputTokens 字段，
     # AI 从模型接口取真实上下文/回复上限，取不到则省略（不写 0）。

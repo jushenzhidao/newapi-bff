@@ -29,6 +29,7 @@ mock 模式（BFF_MOCK_MODE=1）：内存数据演示。
 """
 import contextlib
 import hashlib
+import json
 import logging
 import os
 import re
@@ -1489,10 +1490,11 @@ async def import_doc_prepare_session(request: Request, session: dict = Depends(r
 def _render_import_doc(api_key: str, bff_origin: str) -> str:
     """渲染 WorkBuddy 自助导入文档（markdown）。
 
-    AI 用其中的 Key 调 /v1/models 拿模型列表，再调 /api/config 拿 model_vendors
-    （id → 供应商），合并写本机 models.json —— 与 windows 脚本
-    （static/setup/configure-workbuddy-models.sh）的 lookup 逻辑一致：
-    vendor 取 `modelVendors[id] || 'Custom'`。BFF 后端不代调 new-api，零 401 风险。
+    AI 用其中的 Key 调 /v1/models 拿网关可用模型，再按文档内联的「管理员展示
+    模型清单」白名单做前缀过滤，只把 **网关可用 ∩ 展示清单** 的模型写进本机
+    models.json —— 与 windows 脚本（static/setup/configure-workbuddy-models.sh）
+    的安装语义一致（白名单前缀匹配、交集为空回退白名单本身）；vendor 取
+    `modelVendors[id] || 'Custom'`。BFF 后端不代调 new-api，零 401 风险。
 
     bff_origin：BFF 反代域 origin（不含路径），用于拼出 /api/config 的绝对 URL；
     API_BASE_URL 走另一条路径（new-api 网关域，含 /v1）。
@@ -1500,11 +1502,17 @@ def _render_import_doc(api_key: str, bff_origin: str) -> str:
     api_base = config.API_BASE_URL.rstrip("/")
     models_url = f"{api_base}/models"
     config_url = f"{bff_origin.rstrip('/')}/api/config"
+    # 白名单 / 供应商映射在服务端取好内联：AI 照单过滤即可，不必再请求
+    # /api/config 自己解析（少一步网络与解析出错）。config_url 仅作为可选的
+    # 核对来源保留在文档里。
+    whitelist = [str(m).strip() for m in (config.DOC_MODELS or ()) if str(m).strip()]
+    whitelist_json = json.dumps(whitelist, ensure_ascii=False)
+    vendors_json = json.dumps(dyn_settings.model_vendor_map(), ensure_ascii=False)
     json_example = (
         "{\n"
         '  "id": "<模型id>",\n'
         '  "name": "<模型id>",\n'
-        '  "vendor": "<从 model_vendors[id] 查，未命中写 Custom>",\n'
+        '  "vendor": "<model_vendors[模型id] 的值；未命中写 Custom>",\n'
         f'  "url": "{api_base}",\n'
         f'  "apiKey": "{api_key}",\n'
         '  "supportsToolCall": true,\n'
@@ -1524,17 +1532,30 @@ def _render_import_doc(api_key: str, bff_origin: str) -> str:
         f"{api_key}\n"
         "```\n"
         "该密钥仅用于调用模型接口与写入本机配置，请勿透露到对话外，写完即可丢弃。\n\n"
+        "## 站点配置（已内联，按此执行；接口核对可选）\n"
+        f"- 网关地址（条目 `url` 用这个）：`{api_base}`\n"
+        f"- 允许安装的模型**白名单**（管理员后台「展示模型清单」，与站点配置 "
+        f"`{config_url}` 的 `data.api.models` 同源，需要时可用它自愿核对，非必须）："
+        f"`{whitelist_json}`\n"
+        f"- 模型→供应商映射（vendor 用；未命中写 Custom）：`{vendors_json}`\n\n"
         "## 步骤\n"
-        "1. **拿站点配置**（vendor 映射路径：`data.api.model_vendors`，对象格式 `{模型id: 供应商名}`，未配置即为空对象 `{}`）：\n"
-        "```bash\n"
-        f"curl -sSL \"{config_url}\"\n"
-        "```\n"
-        "2. **拿模型列表**（请求头 `Authorization: Bearer <上方密钥>`；`-L` 跟随 FastAPI 默认的尾斜杠 301）：\n"
+        "1. 用上方密钥调用模型列表接口（`-L` 跟随 FastAPI 默认的尾斜杠 301）：\n"
         "```bash\n"
         f"curl -sSL \"{models_url}\" \\\n"
         f"  -H \"Authorization: Bearer {api_key}\"\n"
         "```\n"
-        "3. 解析第 2 步返回 JSON 的 `data` 数组，提取每个模型的 `id`。\n"
+        "2. 解析返回 JSON 的 `data` 数组，按**白名单前缀匹配**过滤出要安装的模型：\n"
+        "   - 模型 `id` **等于白名单某项、或以白名单某项开头**（大小写不敏感；"
+        "白名单项是前缀，如白名单含 `gpt-4o`，则 `gpt-4o-2024-11-20` 命中）→ 保留该 `id`。\n"
+        "   - 其余一律丢弃。\n"
+        "   - 若过滤后一个都不剩（网关可用模型与白名单无交集）→ **改用白名单本身**，"
+        "每个白名单项作为一个模型 `id`。\n"
+        "3. 为每个保留的模型生成如下条目（`vendor` 取「模型→供应商映射」中该 id 的值，"
+        "未命中写 `Custom`；`maxInputTokens`/`maxOutputTokens` 从模型接口返回的上下文/"
+        "回复长度上限取真实值，取不到则省略该字段，不要写 0）：\n"
+        "```json\n"
+        f"{json_example}"
+        "```\n"
         "4. **先定位本机 WorkBuddy 模型配置文件models.json的真实路径**"
         "   定位到文件后读取它，并判断它的「根形态」：\n"
         "   - 文件不存在（刚新建的 `[]`） → 形态 = **顶层数组**。\n"
@@ -1542,18 +1563,12 @@ def _render_import_doc(api_key: str, bff_origin: str) -> str:
         "   - 根是 JSON 对象且 `.models` 是数组 → 形态 = **{models:[]}**，用 `.models` 字段。\n"
         "   - 根是 JSON 对象且 `.models` 不存在或不是数组 → 不要直接覆盖；"
         "把根原样收成 `custom` 字段，新建 `models` 数组（避免破坏自定义设置）。\n"
-        "5. 为每个模型生成如下条目（`vendor` 取 `modelVendors[<id>] || 'Custom'`；"
-        "`maxInputTokens`/`maxOutputTokens` 从模型接口返回的上下文/回复长度上限取真实值，"
-        "取不到则省略该字段，不要写 0）：\n"
-        "```json\n"
-        f"{json_example}"
-        "```\n"
-        "6. **按识别到的根形态合并**（按 `id` 去重，已存在的用新条目覆盖）：\n"
+        "5. **按识别到的根形态合并**（按 `id` 去重，已存在的用新条目覆盖）：\n"
         "   - 顶层数组 → 把新条目 push 进根数组。\n"
         "   - {models:[]} → 把新条目放进 `.models`。\n"
         "   - 兜底（无 `.models` 字段） → 在根对象里新建 `models` 数组，根对象的剩余字段收为 `custom` 再写回。\n"
-        "7. 原子写回原文件（先写临时文件再替换，避免半截写入）。\n"
-        "8. 提示用户：重启 WorkBuddy 后配置生效。\n"
+        "6. 原子写回原文件（先写临时文件再替换，避免半截写入）。\n"
+        "7. 提示用户：重启 WorkBuddy 后配置生效。\n"
     )
 
 
