@@ -17,6 +17,10 @@ services:
     restart: unless-stopped
 
     # 只绑回环：生产 TLS 由宿主机 Nginx/Caddy 终止，防绕过反代的明文旁路。
+    #
+    # 端口映射只能写成下面这种 YAML 列表项（这是 compose 语法）。
+    # 千万不要写成 `BFF_PORT=8000`（那是 .env 的写法）—— compose 解析会报错。
+    # 要改宿主机端口，去 .env 里改 BFF_PORT 的数值即可，这里不用动。
     ports:
       - "127.0.0.1:${BFF_PORT:-8000}:8000"
 
