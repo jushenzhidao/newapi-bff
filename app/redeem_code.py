@@ -53,6 +53,7 @@ import hashlib
 import hmac
 import logging
 import re
+import asyncio
 
 from . import config
 from . import newapi_client as na
@@ -139,7 +140,7 @@ async def login_or_create(code: str, client_ip: str | None = None) -> dict:
         return {**info, "is_new": False, "redeemed_quota": 0}
     except NewApiError as e:
         if e.status_code == 429:
-            raise                       # 限流原样抛出，让上层给出等待时长
+            raise  # 限流原样抛出，让上层给出等待时长
         # 账号不存在 → 走首次流程。这里不细分错误类型：
         # new-api 对"用户不存在"和"密码错误"返回同一句话，而密码是我们自己派生的，
         # 不可能错，所以走到这里只可能是账号不存在。
@@ -170,6 +171,26 @@ async def login_or_create(code: str, client_ip: str | None = None) -> dict:
     except Exception as exc:
         await _rollback(uid, raw, exc)
         raise NewApiError("兑换码核销失败，可能已被使用，请稍后重试", 400)
+    # ④ 补默认 Key。上游只有 /api/user/register 会派发初始令牌（GENERATE_DEFAULT_TOKEN，
+    #    上游默认关闭、本站已开），管理员建号接口 POST /api/user/ 不建任何令牌。
+    #    必须用**用户自己的 PAT**：/api/token/ 的归属取自 PAT，New-Api-User 头不改变它（见 newapi_client.py:521）。
+    #    失败不回滚——额度已到账，为一把可手动补建的 Key 撤销充值代价过大。
+    for attempt in range(3):
+        try:
+            await na.create_token(info["pat"], uid, "兑换码默认key")
+            break
+        except NewApiError as e:
+            if e.status_code == 429:
+                # /api/token/ 走 GlobalWebRateLimit，窗口按分钟计，短退避重试没有意义
+                logger.warning("默认 Key 创建被限流 uid=%s，用户需自行创建", uid)
+                break
+            if attempt == 2:
+                logger.warning("默认 Key 创建失败 uid=%s err=%s，用户需自行创建", uid, e.message)
+                break
+            await asyncio.sleep(0.5 * (attempt + 1))
+        except Exception:
+            logger.exception("默认 Key 创建异常 uid=%s，用户需自行创建", uid)
+            break
 
     logger.info("兑换码首次登录成功 code=%s uid=%s quota=%s", mask(raw), uid, quota)
     return {**info, "is_new": True, "redeemed_quota": int(quota or 0)}
@@ -233,7 +254,7 @@ def _mock_login(raw: str, username: str, password: str) -> dict:
     try:
         quota = store.use_redemption(raw, u["uid"])
     except ValueError:
-        store.delete_user(u["uid"])          # 与真实模式一致的回滚
+        store.delete_user(u["uid"])  # 与真实模式一致的回滚
         raise NewApiError("兑换码核销失败，可能已被使用，请稍后重试", 400)
     return {"uid": u["uid"], "username": username, "pat": u["pat"],
             "user": u, "is_new": True, "redeemed_quota": quota}
