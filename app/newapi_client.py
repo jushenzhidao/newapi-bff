@@ -285,8 +285,8 @@ async def _recover_admin_pat_by_readback() -> bool:
         # 无论读回成败都立刻归还登录会话（会话是稀缺资源）
         try:
             await _release_session(access_token, uid, session)
-        except Exception:  # noqa: BLE001 归还失败不影响主流程
-            pass
+        except Exception as e:  # noqa: BLE001 归还失败不影响主流程
+            logger.debug("release session after readback failed: %s", e)
     pat = (body.get("data") or {}).get("access_token") or ""
     if not pat:
         logger.warning("admin account has no access_token set; readback empty")
@@ -312,8 +312,8 @@ async def _admin_login() -> None:
     finally:
         try:
             await _release_session(access_token, uid, session)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001 归还失败不影响主流程
+            logger.debug("release session after rotate failed: %s", e)
     _admin_cache["pat"] = pat_body["data"]
     _admin_cache["uid"] = uid
     # ⭐ 强制落盘：新 PAT 是凭据文件的最新事实，env 直供模式也必须写（同机其他

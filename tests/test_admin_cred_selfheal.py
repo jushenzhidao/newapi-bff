@@ -18,7 +18,8 @@ import os
 
 import pytest
 
-from app import config, newapi_client as nc
+from app import config
+from app import newapi_client as nc
 
 
 @pytest.fixture(autouse=True)
@@ -206,7 +207,7 @@ def test_admin_request_401_rotates_and_persists(monkeypatch):
 # ---------------------------------------------------------------------------
 # 5) 读回恢复（跨服务器部署的核心，2026-09-20）：读 access_token 而非轮换
 # ---------------------------------------------------------------------------
-def _fake_readback_request(token_calls, *, self_token="read-back-pat"):
+def _fake_readback_request(token_calls, *, self_auth="read-back-pat"):
     """构造读回场景的 request mock：login → self（读回）→ sessions 归还。
 
     /api/user/token（轮换端点）一旦被调用就记录 —— 读回机制下它绝不能出现。
@@ -217,7 +218,7 @@ def _fake_readback_request(token_calls, *, self_token="read-back-pat"):
             return {"data": {"user": {"id": 1}, "access_token": "sess-at",
                              "session": {"sid": "s1"}}}
         if path == "/api/user/self":
-            return {"data": {"id": 1, "access_token": self_token}}
+            return {"data": {"id": 1, "access_token": self_auth}}
         if path == "/api/user/sessions/s1":
             return {}
         if path == "/api/user/token":
@@ -237,7 +238,7 @@ def test_self_heal_readback_recovers_without_rotation(monkeypatch, tmp_path):
     token_calls: list = []
 
     monkeypatch.setattr(nc, "request",
-                        _fake_readback_request(token_calls, self_token="read-back-pat"))
+                        _fake_readback_request(token_calls, self_auth="read-back-pat"))
     asyncio.run(nc._self_heal_admin_cred())
     assert nc._admin_cache["pat"] == "read-back-pat"
     assert nc._admin_cache["uid"] == 1
@@ -259,7 +260,7 @@ def test_self_heal_readback_empty_falls_to_rotation(monkeypatch):
 
     monkeypatch.setattr(nc, "_admin_login", fake_login)
     monkeypatch.setattr(nc, "request",
-                        _fake_readback_request(token_calls, self_token=""))
+                        _fake_readback_request(token_calls, self_auth=""))
     asyncio.run(nc._self_heal_admin_cred())
     assert nc._admin_cache["pat"] == "rotated-pat"  # 兜底轮换生效
     assert token_calls == []  # 轮换发生在 mock 的 _admin_login 内，request 层未触达
