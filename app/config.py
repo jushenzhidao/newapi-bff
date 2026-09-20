@@ -92,10 +92,21 @@ NEWAPI_ADMIN_PAT: str = os.getenv("NEWAPI_ADMIN_PAT", "").strip()
 NEWAPI_ADMIN_UID: int = _int("NEWAPI_ADMIN_UID", 0)
 
 # 管理员 PAT 落盘缓存：进程重启后直接复用，避免每次冷启都 login 消耗一个会话配额。
+# ⭐ 同机多实例（蓝绿/灰度）场景：把多个实例的 BFF_ADMIN_CRED_FILE 指到同一个文件，
+#   任一方兜底轮换出新 PAT 都会强制落盘，另一方 401 时重读该文件即可自愈。
+#   注意：跨服务器部署无法共享文件 —— 靠 NEWAPI_ADMIN_PAT_READBACK（读回恢复）兜底。
 ADMIN_CRED_FILE: str = os.getenv(
     "BFF_ADMIN_CRED_FILE",
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "admin_cred.json"),
 )
+# ⭐ 跨机互踢根治（2026-09-20）：401 自愈时优先「读回」——login 拿会话后用
+#   GET /api/user/self 把账号当前 access_token 原样读回来（读操作不轮换、不作废
+#   旧值，其他服务器上共用该账号的 BFF 零感知）。只有账号压根没设过 access_token
+#   才最后走轮换兜底。设 NEWAPI_ADMIN_PAT_READBACK=0 可关闭读回（直接轮换，不推荐）。
+NEWAPI_ADMIN_PAT_READBACK: bool = os.getenv("NEWAPI_ADMIN_PAT_READBACK", "1").strip() not in ("0", "false", "no")
+# PAT 401 且读回/凭据文件均无法自愈时，是否允许账密兜底登录（会轮换 PAT + 消耗一个会话）。
+# 默认允许；设 NEWAPI_ADMIN_LOGIN_FALLBACK=0 可彻底禁用自动轮换（401 直接报错转人工）。
+NEWAPI_ADMIN_LOGIN_FALLBACK: bool = os.getenv("NEWAPI_ADMIN_LOGIN_FALLBACK", "1").strip() not in ("0", "false", "no")
 
 # 会话 Cookie 加密密钥 —— 生产必须用环境变量注入随机值。
 # security.py 用它经 HKDF-SHA256 派生 AES-256-GCM 密钥，兼顾机密性（载荷里的

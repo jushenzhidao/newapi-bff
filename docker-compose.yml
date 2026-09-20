@@ -141,6 +141,10 @@ services:
       # OSError: [Errno 30] Read-only file system。
       # 后台改配置、写首充记录、存定价快照全部依赖此项，不要删。
       BFF_DATA_DIR: /data
+      # 管理员 PAT 本地缓存（同机多实例共享用；与 flovart-bff 不在同一台服务器，
+      # 跨机一致性靠读回恢复 NEWAPI_ADMIN_PAT_READBACK，见 _self_heal_admin_cred）。
+      # ⚠️ 必须显式指到 /data：config 默认值是 /app/data，根文件系统 read_only 写不进。
+      BFF_ADMIN_CRED_FILE: /data/admin_cred.json
 
     # settings.json（后台配置覆盖）、promo_state.json（赠送幂等）、
     # admin_cred.json（管理员 PAT）、pricing_snapshot.json 都在这里。
