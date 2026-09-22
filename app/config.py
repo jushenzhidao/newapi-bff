@@ -107,6 +107,13 @@ NEWAPI_ADMIN_PAT_READBACK: bool = os.getenv("NEWAPI_ADMIN_PAT_READBACK", "1").st
 # PAT 401 且读回/凭据文件均无法自愈时，是否允许账密兜底登录（会轮换 PAT + 消耗一个会话）。
 # 默认允许；设 NEWAPI_ADMIN_LOGIN_FALLBACK=0 可彻底禁用自动轮换（401 直接报错转人工）。
 NEWAPI_ADMIN_LOGIN_FALLBACK: bool = os.getenv("NEWAPI_ADMIN_LOGIN_FALLBACK", "1").strip() not in ("0", "false", "no")
+# 兜底轮换冷静期（2026-09-22 三应用共用 uid=1 血案）：跨机/跨容器 + 上游
+#   /api/user/self 不回 access_token 时，读回恢复必失败 → 谁兜底轮换谁把共用
+#   同一账号的其他应用全踢下线 → 对方 401 再轮换 → 无限乒乓，每轮烧一个登录
+#   会话 + 签发额度（USER_SESSION_ISSUANCE_LIMIT 按账号计，打满全员登不进）。
+#   冷静期内（默认 900s）本进程已轮换过仍 401 → 不再轮换，503 转人工，把
+#   「无限互踢」压成「每实例每窗口至多一次」。设 0 关闭（单应用独占账号时可关）。
+NEWAPI_ADMIN_ROTATE_COOLDOWN: int = int(os.getenv("NEWAPI_ADMIN_ROTATE_COOLDOWN", "900"))
 
 # 会话 Cookie 加密密钥 —— 生产必须用环境变量注入随机值。
 # security.py 用它经 HKDF-SHA256 派生 AES-256-GCM 密钥，兼顾机密性（载荷里的
