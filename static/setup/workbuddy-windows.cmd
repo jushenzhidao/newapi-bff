@@ -155,7 +155,8 @@ function New-FixedModel {
         maxInputTokens = $maxInputTokens
         maxOutputTokens = $maxOutputTokens
     }
-    if (-not $creditsValue) { $entry.Remove('credits') }
+    # 有 credits 才写入字段，没有则保持条目里不带该键（与 sh/ps1 产出一致）
+    if ($creditsValue) { $entry['credits'] = $creditsValue }
     return [PSCustomObject]$entry
 }
 
