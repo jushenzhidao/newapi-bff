@@ -118,7 +118,21 @@ async def _lifespan(_app: FastAPI):
         await openai_proxy.close()
 
 
-app = FastAPI(title="newapi-bff", docs_url=None, redoc_url=None, lifespan=_lifespan)
+class UnicodeJSONResponse(JSONResponse):
+    """显式声明 charset 的 JSON 响应。
+
+    Starlette 默认 JSONResponse 的 Content-Type 是「application/json」不带
+    charset，Windows PowerShell 5.1 的 Invoke-RestMethod 对未标注 charset 的
+    响应默认按 ISO-8859-1 解码 —— /api/config 里的中文（credits 标签如
+    「超高级」）到 Windows 安装脚本里全变乱码。服务端统一带上 charset=utf-8，
+    老脚本不用重发也能修好。
+    """
+
+    media_type = "application/json; charset=utf-8"
+
+
+app = FastAPI(title="newapi-bff", docs_url=None, redoc_url=None, lifespan=_lifespan,
+              default_response_class=UnicodeJSONResponse)
 
 # 可观测性接线：未配 LOGFIRE_TOKEN 时为空操作，且初始化失败不影响服务启动。
 observability.setup(app)
@@ -139,14 +153,14 @@ MAX_PASSWORD_LEN = 20
 # ---------- 异常处理：业务错误透传 message，内部错误不泄露 ----------
 @app.exception_handler(NewApiError)
 async def newapi_error_handler(request: Request, exc: NewApiError):
-    return JSONResponse(status_code=exc.status_code,
-                        content={"success": False, "message": exc.message})
+    return UnicodeJSONResponse(status_code=exc.status_code,
+                              content={"success": False, "message": exc.message})
 
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("unhandled error on %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"success": False, "message": "服务器内部错误"})
+    return UnicodeJSONResponse(status_code=500, content={"success": False, "message": "服务器内部错误"})
 
 
 def client_ip(request: Request) -> str:
@@ -165,7 +179,7 @@ def ok(data=None, message: str = ""):
 
 
 def fail(message: str, status_code: int = 400):
-    return JSONResponse(status_code=status_code, content={"success": False, "message": message})
+    return UnicodeJSONResponse(status_code=status_code, content={"success": False, "message": message})
 
 
 # ==================== 活动配置 ====================
@@ -1106,9 +1120,9 @@ async def readyz():
         # 带原因一起打，日志本身就够定位问题，不用再去翻代码猜哪个分支挂了
         logger.error("readiness 检查未通过: %s",
                      "; ".join(f"{k}: {v}" for k, v in reasons.items()))
-        return JSONResponse(status_code=503,
-                            content={"status": "unready", "checks": checks,
-                                     "failed": list(reasons), "reasons": reasons})
+        return UnicodeJSONResponse(status_code=503,
+                                   content={"status": "unready", "checks": checks,
+                                            "failed": list(reasons), "reasons": reasons})
     return {
         "status": "ready", "checks": checks, "version": APP_VERSION,
         # 上游地址对排障至关重要：连错库（测试/生产）不会报错，只会表现为

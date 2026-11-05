@@ -158,7 +158,16 @@ $vendorMap = @{}
 if ($modelsFetched) {
     Write-Host "正在读取站点配置（模型供应商映射 / credits 标签）..."
     try {
-        $sc = Invoke-RestMethod -Uri $script:SiteConfigUrl -TimeoutSec 30
+        # PS 5.1 对未标 charset 的 application/json 默认按 ISO-8859-1 解码，
+        # 中文 credits（如「超高级」）会乱码 —— 这里取原始字节强制按 UTF-8 解。
+        # PS 7+ 没有 RawContentStream，但其默认就是 UTF-8，直接用 Content。
+        $scResponse = Invoke-WebRequest -UseBasicParsing -Uri $script:SiteConfigUrl -TimeoutSec 30
+        $scProps = @($scResponse.PSObject.Properties.Name)
+        if (($scProps -contains 'RawContentStream') -and $null -ne $scResponse.RawContentStream) {
+            $sc = [Text.Encoding]::UTF8.GetString($scResponse.RawContentStream.ToArray()) | ConvertFrom-Json
+        } else {
+            $sc = [string]$scResponse.Content | ConvertFrom-Json
+        }
         $scApi = $sc.data.api
         if ($scApi) {
             if ($scApi.model_credits) {
