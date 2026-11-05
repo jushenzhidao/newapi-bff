@@ -201,9 +201,11 @@ jobs:
             || { echo "::error::端口未绑定到回环地址"; exit 1; }
           echo "生产写死项校验通过（MOCK=0 / COOKIE_SECURE=1 / 端口绑回环）"
 
-          # 逐个抽掉必填项，compose 都必须拒绝渲染（:? 语法生效）
+          # 逐个抽掉必填项，compose 都必须拒绝渲染（:? 语法生效）。
+          # 注意 USERNAME/PASSWORD 不在列：统一运营号模式下它们已改为可选
+          # （PAT 是唯一主通道，账密只是自愈通道，缺失时启动自检会打 warning）。
           for missing in BFF_SECRET_KEY APP_VERSION NEWAPI_BASE_URL \
-                         NEWAPI_ADMIN_PAT NEWAPI_ADMIN_USERNAME; do
+                         NEWAPI_ADMIN_PAT NEWAPI_ADMIN_UID; do
             if env BFF_SECRET_KEY=$(openssl rand -hex 32) "$missing=" \
                  docker compose config -q 2>/dev/null; then
               echo "::error::缺失 $missing 时 compose 仍通过校验"
