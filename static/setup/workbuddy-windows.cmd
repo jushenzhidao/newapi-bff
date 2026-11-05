@@ -340,6 +340,17 @@ try {
         $modelIDs = $fallbackModelIDs
     }
 
+    # 按后台「展示模型清单」的配置顺序输出：客户端按 models.json 数组顺序展示，
+    # 而网关 /v1/models 返回的是字母序，直接用会打乱管理员配置的展示顺序。
+    $orderedIDs = @()
+    foreach ($allow in $fallbackModelIDs) {
+        $allowKey = $allow.ToLower()
+        foreach ($mid in $modelIDs) {
+            if ($mid.ToLower() -eq $allowKey) { $orderedIDs += $mid; break }
+        }
+    }
+    if ($orderedIDs.Count -gt 0) { $modelIDs = $orderedIDs }
+
     $apiBaseUrl = $setupApiBaseUrl
     $supportsToolCall = $true
     $supportsReasoning = $true
@@ -439,23 +450,20 @@ try {
 
     $updatedModels = New-Object System.Collections.ArrayList
     $installedIDs = @{}
-    foreach ($item in @($models)) {
-        $itemID = if ($null -ne $item -and $item.PSObject.Properties.Name -contains 'id') { [string]$item.id } else { '' }
-        if ($itemID -and $fixedModelByID.ContainsKey($itemID)) {
-            if (-not $installedIDs.ContainsKey($itemID)) {
-                [void]$updatedModels.Add($fixedModelByID[$itemID])
-                $installedIDs[$itemID] = $true
-            }
-            continue
-        }
-        [void]$updatedModels.Add($item)
-    }
-
+    # 白名单模型按配置顺序排在数组最前（客户端按数组顺序展示），
+    # 其余已有条目顺序保留、跟在后面。
     foreach ($model in $fixedModels) {
         if (-not $installedIDs.ContainsKey($model.id)) {
             [void]$updatedModels.Add($model)
             $installedIDs[$model.id] = $true
         }
+    }
+    foreach ($item in @($models)) {
+        $itemID = if ($null -ne $item -and $item.PSObject.Properties.Name -contains 'id') { [string]$item.id } else { '' }
+        if ($itemID -and $installedIDs.ContainsKey($itemID)) {
+            continue
+        }
+        [void]$updatedModels.Add($item)
     }
 
     if ($rootType -eq 'object') {

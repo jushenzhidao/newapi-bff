@@ -371,6 +371,16 @@ function run(argv) {
     }
   }
 
+  // 按后台「展示模型清单」的配置顺序输出：客户端按 models.json 数组顺序展示，
+  // 而网关 /v1/models 返回的是字母序，直接用会打乱管理员配置的展示顺序。
+  const orderIndex = {};
+  allowedModelIDs.forEach(function (m, i) { orderIndex[m] = i; });
+  modelIDs.sort(function (a, b) {
+    const ia = orderIndex[a.toLowerCase()];
+    const ib = orderIndex[b.toLowerCase()];
+    return (ia === undefined ? 9999 : ia) - (ib === undefined ? 9999 : ib);
+  });
+
   const supportsToolCall = true;
   const supportsReasoning = true;
   const useCustomProtocol = false;
@@ -432,22 +442,19 @@ function run(argv) {
 
   const updatedModels = [];
   const installedIDs = {};
-  models.forEach(function (item) {
-    if (item && fixedModelByID[item.id]) {
-      if (!installedIDs[item.id]) {
-        updatedModels.push(fixedModelByID[item.id]);
-        installedIDs[item.id] = true;
-      }
-      return;
-    }
-    updatedModels.push(item);
-  });
-
+  // 白名单模型按配置顺序排在数组最前（客户端按数组顺序展示），
+  // 其余已有条目顺序保留、跟在后面。
   fixedModels.forEach(function (model) {
     if (!installedIDs[model.id]) {
       updatedModels.push(model);
       installedIDs[model.id] = true;
     }
+  });
+  models.forEach(function (item) {
+    if (item && installedIDs[item.id]) {
+      return;
+    }
+    updatedModels.push(item);
   });
 
   if (rootType === 'object') {

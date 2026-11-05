@@ -207,6 +207,17 @@ if ($siteModels.Count -gt 0 -and $modelIDs.Count -gt 0) {
     }
 }
 
+# 按后台「展示模型清单」的配置顺序输出：客户端按 models.json 数组顺序展示，
+# 而网关 /v1/models 返回的是字母序，直接用会打乱管理员配置的展示顺序。
+if ($siteModels.Count -gt 0 -and $modelIDs.Count -gt 1) {
+    $orderMap = @{}
+    for ($i = 0; $i -lt $siteModels.Count; $i++) {
+        $k = ([string]$siteModels[$i]).Trim().ToLower()
+        if ($k -and -not $orderMap.ContainsKey($k)) { $orderMap[$k] = $i }
+    }
+    $modelIDs = @($modelIDs | Sort-Object { $k = ([string]$_).Trim().ToLower(); if ($orderMap.ContainsKey($k)) { $orderMap[$k] } else { 9999 } })
+}
+
 # ---------------- 构造目标模型列表 ----------------
 $fixedModels = @()
 foreach ($modelID in $modelIDs) {
@@ -269,23 +280,21 @@ foreach ($m in $fixedModels) { $fixedByID[$m.id] = $m }
 
 $updatedModels = @()
 $installedIDs = @{}
-foreach ($item in $models) {
-    $itemID = $null
-    if ($item -is [PSCustomObject]) { $itemID = $item.id }
-    if ($itemID -and $fixedByID.ContainsKey($itemID)) {
-        if (-not $installedIDs.ContainsKey($itemID)) {
-            $updatedModels += $fixedByID[$itemID]
-            $installedIDs[$itemID] = $true
-        }
-        continue
-    }
-    $updatedModels += $item
-}
+# 白名单模型按配置顺序排在数组最前（客户端按数组顺序展示），
+# 其余已有条目顺序保留、跟在后面。
 foreach ($m in $fixedModels) {
     if (-not $installedIDs.ContainsKey($m.id)) {
         $updatedModels += $m
         $installedIDs[$m.id] = $true
     }
+}
+foreach ($item in $models) {
+    $itemID = $null
+    if ($item -is [PSCustomObject]) { $itemID = $item.id }
+    if ($itemID -and $installedIDs.ContainsKey($itemID)) {
+        continue
+    }
+    $updatedModels += $item
 }
 
 if ($rootIsObject) {

@@ -1521,12 +1521,18 @@ async def _build_setup_models(pat: str) -> dict:
         items = []
     ids = [m.get("id") for m in items if isinstance(m, dict) and m.get("id")]
 
-    def allowed(mid: str) -> bool:
-        if mid in whitelist:
-            return True
-        return any(mid.startswith(w) for w in whitelist)
+    # 严格匹配（大小写不敏感）+ 白名单顺序输出：
+    # - 曾经用 startswith 前缀匹配兼容版本后缀渠道模型，结果把 claude-fable-5-1
+    #   这类衍生 ID 一起带了进来，与四个安装脚本的严格匹配口径一致改为全等；
+    # - 客户端按 models.json 数组顺序展示，这里直接按后台「展示模型清单」的
+    #   配置顺序产出，保证导入指令 / 安装脚本 / 手动配置所有通道顺序一致。
+    ids_lower = {str(mid).strip().lower(): mid for mid in ids if str(mid).strip()}
+    filtered = [ids_lower[str(w).strip().lower()] for w in whitelist
+                if str(w).strip().lower() in ids_lower]
+    if not filtered:
+        # 与四个安装脚本口径一致：交集为空回退白名单本身（保证配置总能完成）
+        filtered = [str(w).strip() for w in whitelist if str(w).strip()]
 
-    filtered = [mid for mid in ids if allowed(mid)]
     out = []
     for mid in filtered:
         out.append({
@@ -1653,9 +1659,9 @@ def _render_import_doc(api_key: str, bff_origin: str) -> str:
     """渲染 WorkBuddy 自助导入文档（markdown）。
 
     AI 用其中的 Key 调 /v1/models 拿网关可用模型，再按文档内联的「管理员展示
-    模型清单」白名单做前缀过滤，只把 **网关可用 ∩ 展示清单** 的模型写进本机
-    models.json —— 与 windows 脚本（static/setup/configure-workbuddy-models.sh）
-    的安装语义一致（白名单前缀匹配、交集为空回退白名单本身）；vendor 取
+    模型清单」白名单做严格匹配过滤，只把 **网关可用 ∩ 展示清单** 的模型按白名单
+    顺序写进本机 models.json —— 与四个安装脚本的安装语义一致（白名单严格匹配、
+    交集为空回退白名单本身、白名单顺序输出）；vendor 取
     `modelVendors[id] || 'Custom'`。BFF 后端不代调 new-api，零 401 风险。
 
     bff_origin：BFF 反代域 origin（不含路径），用于拼出 /api/config 的绝对 URL；
@@ -1710,32 +1716,36 @@ def _render_import_doc(api_key: str, bff_origin: str) -> str:
         f"curl -sSL \"{models_url}\" \\\n"
         f"  -H \"Authorization: Bearer {api_key}\"\n"
         "```\n"
-        "2. 解析返回 JSON 的 `data` 数组，按**白名单前缀匹配**过滤出要安装的模型：\n"
-        "   - 模型 `id` **等于白名单某项、或以白名单某项开头**（大小写不敏感；"
-        "白名单项是前缀，如白名单含 `gpt-4o`，则 `gpt-4o-2024-11-20` 命中）→ 保留该 `id`。\n"
-        "   - 其余一律丢弃。\n"
+        "2. 解析返回 JSON 的 `data` 数组，按**白名单严格匹配**过滤出要安装的模型：\n"
+        "   - 模型 `id` **与白名单某项完全相等**（大小写不敏感）→ 保留该 `id`。\n"
+        "   - 注意是全等，不是前缀：以白名单项开头的衍生 ID（如白名单含 `claude-fable-5`"
+        " 时渠道里的 `claude-fable-5-1`）**不在清单内，一律丢弃**。\n"
         "   - 若过滤后一个都不剩（网关可用模型与白名单无交集）→ **改用白名单本身**，"
         "每个白名单项作为一个模型 `id`。\n"
-        "3. 为每个保留的模型生成如下条目（`vendor` 取「模型→供应商映射」中该 id 的值，"
+        "3. **按白名单顺序排列**过滤结果：客户端按 models.json 数组顺序展示，"
+        "写文件时白名单命中的模型条目必须按上面白名单 JSON 的先后顺序排在数组最前面，"
+        "数组里其余已有的非白名单模型条目顺序保留、跟在后面。\n"
+        "4. 为每个保留的模型生成如下条目（`vendor` 取「模型→供应商映射」中该 id 的值，"
         "未命中写 `Custom`；`credits` 取「模型→credits 标签映射」中该 id 的值，"
         "未命中写空字符串；`maxInputTokens`/`maxOutputTokens` 从模型接口返回的上下文/"
         "回复长度上限取真实值，取不到则省略该字段，不要写 0）：\n"
         "```json\n"
         f"{json_example}"
         "```\n"
-        "4. **先定位本机 WorkBuddy 模型配置文件models.json的真实路径**"
+        "5. **先定位本机 WorkBuddy 模型配置文件models.json的真实路径**"
         "   定位到文件后读取它，并判断它的「根形态」：\n"
         "   - 文件不存在（刚新建的 `[]`） → 形态 = **顶层数组**。\n"
         "   - 根是 JSON 数组 → 形态 = **顶层数组**，整份文件就是模型列表。\n"
         "   - 根是 JSON 对象且 `.models` 是数组 → 形态 = **{models:[]}**，用 `.models` 字段。\n"
         "   - 根是 JSON 对象且 `.models` 不存在或不是数组 → 不要直接覆盖；"
         "把根原样收成 `custom` 字段，新建 `models` 数组（避免破坏自定义设置）。\n"
-        "5. **按识别到的根形态合并**（按 `id` 去重，已存在的用新条目覆盖）：\n"
-        "   - 顶层数组 → 把新条目 push 进根数组。\n"
-        "   - {models:[]} → 把新条目放进 `.models`。\n"
+        "6. **按识别到的根形态合并**（按 `id` 去重，已存在的用新条目覆盖；"
+        "白名单模型条目按第 3 步的顺序排在数组最前，其余已有条目跟在后面）：\n"
+        "   - 顶层数组 → 整份重排后写回根数组。\n"
+        "   - {models:[]} → 整份重排后写回 `.models`。\n"
         "   - 兜底（无 `.models` 字段） → 在根对象里新建 `models` 数组，根对象的剩余字段收为 `custom` 再写回。\n"
-        "6. 原子写回原文件（先写临时文件再替换，避免半截写入）。\n"
-        "7. 提示用户：重启 WorkBuddy 后配置生效。\n"
+        "7. 原子写回原文件（先写临时文件再替换，避免半截写入）。\n"
+        "8. 提示用户：重启 WorkBuddy 后配置生效。\n"
     )
 
 
