@@ -380,12 +380,13 @@ function copyDocField(btn) {
  * 厂商排序沿用部署脚本约定：国外厂商（OpenAI、Anthropic）置顶，其余按出现顺序，Custom 永远最后。 */
 const _MODEL_VENDOR_PIN = ["OpenAI", "Anthropic"];
 async function docShowModels(action) {
-  let models = [], vendors = {};
+  let models = [], vendors = {}, credits = {};
   try {
     const r = await api("/api/config");
     const apiCfg = (r && r.data && r.data.api) || {};
     models = apiCfg.models || [];
     vendors = apiCfg.model_vendors || {};
+    credits = apiCfg.model_credits || {};
   } catch (e) { /* 取失败则走空清单兜底 */ }
 
   const groups = {};
@@ -406,7 +407,10 @@ async function docShowModels(action) {
         <div class="doc-models-group">
           <div class="doc-models-vendor">${esc(v)}</div>
           <ul class="doc-models-list">${
-            (groups[v] || []).map((m) => `<li>${esc(m)}</li>`).join("")
+            (groups[v] || []).map((m) => {
+              const cr = credits[String(m).toLowerCase()] || "";
+              return `<li>${esc(m)}${cr ? ` <span class="doc-model-credits">${esc(cr)}</span>` : ""}</li>`;
+            }).join("")
           }</ul>
         </div>`).join("")
     : '<div class="muted">暂无可用模型</div>';

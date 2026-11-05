@@ -167,9 +167,13 @@ def _str_list(max_items: int = 40) -> Callable[[Any], list]:
     return parse
 
 
-# 需要二次确认的高风险项：改动会影响**已有用户看到的数字口径**，
-# 不是错配置，而是「确实会变、且必须由人明确知晓」。
-RATE_SENSITIVE = ("POINTS_PER_CNY",)
+# 需要二次确认的高风险项：改动会影响**已有用户看到的数字口径**，不是错配置，
+# 而是「确实会变、且必须由人明确知晓」。
+# 前端据此弹确认框（见 static/app.js 的保存分支）。
+RATE_SENSITIVE = (
+    "POINTS_PER_CNY",              # 改的是「余额显示口径」，屏幕上的数字会集体变
+    "TOPUP_FOLLOW_UPSTREAM_RATE",  # 改的是「谁承担上游汇率」—— 开启后用户实付金额变高
+)
 
 # key -> (分组, 标签, 解析器, 提示)
 SPECS: dict[str, tuple[str, str, Callable[[Any], Any], str]] = {
@@ -194,6 +198,12 @@ SPECS: dict[str, tuple[str, str, Callable[[Any], Any], str]] = {
     # ---- 充值 ----
     "PAY_AMOUNTS": ("pay", "充值档位（元）", _int_list(1, 100_000),
                     "逗号分隔，自动去重升序"),
+    "TOPUP_FOLLOW_UPSTREAM_RATE": ("pay", "充值叠加上游汇率", _b,
+                                   "默认关闭：档位金额就是应付人民币（¥10 档收 ¥10）。"
+                                   "此时若上游 new-api 的「充值价格 Price」不是 1，下单会被直接拒绝并提示原因"
+                                   "（¥10 档不会被悄悄收成 ¥73）。"
+                                   "开启：承认上游汇率，充值页改为展示上游算出的真实应付金额，"
+                                   "并允许按该金额收款"),
 
     # ---- 运营活动 ----
     "PROMO_SIGNUP_ENABLED": ("promo", "开启注册礼包", _b, ""),
@@ -212,6 +222,7 @@ SPECS: dict[str, tuple[str, str, Callable[[Any], Any], str]] = {
     "DOC_MODELS": ("doc", "展示模型清单", _str_list(), "逗号分隔"),
     "MODEL_VENDORS": ("doc", "模型供应商映射", _str_list(),
                       "格式「模型ID:供应商名」，逗号分隔，如 glm-5.2:zai,deepseek-chat:DeepSeek；供应商须用英文厂商名（智谱=zai，豆包=Volcengine 等），不可填中文。"
+                      "供应商名可追加「&credits 标签」复合值，如 deepseek-v4-flash:DeepSeek&L1-1.0x —— & 后会作为该模型配置的 credits 字段（描述词-相对倍数），vendor 只取 & 前部分。"
                       "未配置的模型不显示供应商。网关的 owned_by 不可信（Claude 会被标成 openai），故自行维护"),
     "DOC_PRODUCTS": ("doc", "上架产品清单", _str_list(),
                      "逗号分隔的产品 id，留空 = 全部上架；填了不存在的 id 会在 /readyz 报错"),
@@ -234,7 +245,7 @@ SPECS: dict[str, tuple[str, str, Callable[[Any], Any], str]] = {
 GROUP_LABELS = {
     "brand": "品牌与文案",
     "points": "积分体系",
-    "pay": "充值档位",
+    "pay": "充值与支付",
     "promo": "运营活动",
     "doc": "接入文档",
     "pricing": "定价表",

@@ -20,6 +20,7 @@ mock 模式（BFF_MOCK_MODE=1）：内存数据演示。
   POST /api/token/{id}/key    获取 Key 明文
   DELETE /api/token/{id}
   GET  /api/log/self          日志 + 统计（points 口径）
+  GET  /api/user/pay/preview  下单前预览（应付金额 / 到账积分 / 上游汇率闸门）
   POST /api/user/pay          创建支付订单（真实：返回易支付表单参数）
   POST /api/user/pay/status   支付到账查询（按订单号查上游订单状态，到账后发首充赠送）
   GET  /usage-logs            易支付回跳落地页（302 到 #/topup，不发钱）
@@ -45,7 +46,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, docs_catalog, observability, pricing, promo, redeem_code, store
+from . import config, docs_catalog, observability, openai_proxy, pricing, promo, redeem_code, store
 from . import newapi_client as na
 from . import settings as dyn_settings
 from .newapi_client import NewApiError
@@ -91,6 +92,20 @@ async def _lifespan(_app: FastAPI):
                 "设置为你的 new-api 域名，否则用户数据会写到错误的环境",
                 config.NEWAPI_BASE_URL,
             )
+        # 管理员凭证模式自检（详见 README「多应用管理员凭证」）：
+        # 统一运营号（禁轮换）与「开着自愈却没账密」是两种需要当场喊出来的姿势。
+        if not MOCK:
+            if not config.NEWAPI_ADMIN_LOGIN_FALLBACK:
+                logger.info(
+                    "管理员凭证: 统一运营号共享模式（LOGIN_FALLBACK=0）—— 401 不会"
+                    "自动重登/轮换；PAT 失效请人工更新 NEWAPI_ADMIN_PAT 后滚动重启"
+                )
+            elif not (config.NEWAPI_ADMIN_USERNAME and config.NEWAPI_ADMIN_PASSWORD):
+                logger.warning(
+                    "管理员账密未配置但 LOGIN_FALLBACK=1：PAT 一旦失效将无法自愈。"
+                    "要么配好 NEWAPI_ADMIN_USERNAME/PASSWORD（独立子管理员模式），"
+                    "要么设 NEWAPI_ADMIN_LOGIN_FALLBACK=0（统一运营号模式）"
+                )
         if MOCK:
             # mock 模式预置演示卡。兑换码语义与真实环境一致：只有预先发放的卡才有效，
             # 不能随便编一串就登录。
@@ -100,12 +115,16 @@ async def _lifespan(_app: FastAPI):
         yield
     finally:
         await na.close()
+        await openai_proxy.close()
 
 
 app = FastAPI(title="newapi-bff", docs_url=None, redoc_url=None, lifespan=_lifespan)
 
 # 可观测性接线：未配 LOGFIRE_TOKEN 时为空操作，且初始化失败不影响服务启动。
 observability.setup(app)
+
+# OpenAI 兼容 /v1 透传层（LibreChat 等标准客户端直连；见 app/openai_proxy.py）。
+app.include_router(openai_proxy.router)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -162,6 +181,7 @@ async def get_site_config():
     前端启动时拉一次，全站文案/示例代码都从这里取 —— 换品牌、换域名、
     换默认模型都只改环境变量，不用动前端代码。
     """
+    vendor_map, credits_map = _split_vendor_credits()
     return ok({
         "brand": {
             "name": config.BRAND_NAME,
@@ -180,10 +200,12 @@ async def get_site_config():
             "base_url": config.API_BASE_URL,
             "default_model": config.DOC_DEFAULT_MODEL,
             "models": list(config.DOC_MODELS),
-            # 模型 → 供应商映射（后台「模型供应商映射」配置），未配置的模型不在其中。
+            # 模型供应商映射（后台「模型供应商映射」），值支持「供应商&credits」
+            # 复合形态，这里统一拆成两份下发：脚本与前端拿到的都是干净数据。
             # 单独成字段而非把 models 改成对象数组：脚本与前端都按字符串数组解析
             # models，改动会波及所有已下发的客户端。
-            "model_vendors": dyn_settings.model_vendor_map(),
+            "model_vendors": vendor_map,
+            "model_credits": credits_map,
         },
         "features": {
             # 关掉后登录页不显示兑换码 Tab
@@ -615,6 +637,79 @@ async def _current_points(session: dict) -> int:
     return P(d.get("quota", 0))
 
 
+# ---------- 充值金额口径（上游汇率闸门）----------
+# 上游 new-api 的收银台实收 = amount × Price × 分组倍率 × 折扣（controller/topup.go
+# 的 getPayMoney），Price 默认 7.3（美元兑人民币）。而 BFF 的档位单位是人民币 ——
+# 上游没把 Price 配成 1 时，「¥10 档」扫码就是 ¥73.00：页面标价与实收差 7.3 倍，
+# 全程不报错，只能在用户投诉时才发现。
+#
+# 下面两个函数把这件事变成**显式闸门**：
+#   关闭叠加上游汇率（默认）：应付必须等于档位金额，否则拒绝下单；
+#   开启：如实展示上游算出的应付金额，让用户在付钱之前就看到真实价格。
+_PAYABLE_TOLERANCE = 0.02   # 上游按两位小数返回，留 2 分容差吸收浮点误差
+
+
+def _rate_gate_message(payable: float, amount: int) -> str:
+    """档位金额与上游应付金额不一致时的拒绝理由：必须能直接指导管理员修复。"""
+    ratio = f"{payable / amount:g}×" if amount else "?"
+    return (f"上游应付金额（¥{payable:.2f}）与本档位金额（¥{amount}）不一致："
+            f"上游按 amount × 充值价格 计算，当前约 {ratio}。"
+            "请把上游 new-api 的「充值价格 Price」改为 1，"
+            "或在「站点配置 → 充值与支付」打开「充值叠加上游汇率」"
+            "（打开后用户实付即为上游金额）。")
+
+
+def _rate_blocked_reason(amount: int, price: float | None) -> str:
+    """「不叠加上游汇率」模式下这一档为何不能下单（空串 = 可以下单）。
+
+    price 未知（上游读不到）时返回空串，**不预拦** —— 预拦会把「上游 /api/status
+    暂时抖了一下」升级成「用户充不了值」。真正的兜底在下单时的权威比对：
+    那一刻的应付金额来自上游本人，比这里的估算可靠。
+    """
+    if price is None or abs(price - 1.0) < 1e-6:
+        return ""
+    return (f"上游充值汇率未对齐：new-api 的「充值价格 Price」= {price:g}，"
+            f"¥{amount} 档实际会被收成 ¥{amount * price:.2f}。"
+            "请把上游 Price 改为 1，或在「站点配置 → 充值与支付」"
+            "打开「充值叠加上游汇率」。")
+
+
+async def _pay_facts(uid: int, amount: int) -> dict:
+    """一档充值的全部事实：要付多少、到账多少、能不能下单。
+
+    应付金额**只能**由上游决定（amount × 上游 Price，Price 是上游的运营配置，
+    BFF 不持有）。没有这个预览接口，前端就只能把档位金额当应付金额写死在按钮上，
+    上游 Price≠1 时立刻变成「按钮写 ¥10、二维码 ¥73」。
+    """
+    follow = bool(config.TOPUP_FOLLOW_UPSTREAM_RATE)
+    price = None if MOCK else await na.get_upstream_topup_price()
+    base_points = config.cny_to_points(amount)
+    bonus = 0 if promo.first_topup_used(uid) else promo.bonus_points_for(amount)
+    blocked = "" if follow else _rate_blocked_reason(amount, price)
+    # 关闭叠加时应付恒等于档位金额；开启时按上游汇率折算（拿不到价格就先按档位金额
+    # 显示，下单那一刻仍以上游返回的权威金额为准，见 create_pay_order）。
+    payable = amount * price if (follow and price) else float(amount)
+    return {
+        "amount": amount,
+        "payable": round(payable, 2),
+        "follow_upstream_rate": follow,
+        "upstream_price": price,
+        "blocked": bool(blocked),
+        "blocked_reason": blocked,
+        "points": base_points,
+        "bonus_points": bonus,
+        "total_points": base_points + bonus,
+    }
+
+
+@app.get("/api/user/pay/preview")
+async def pay_preview(amount: int, session: dict = Depends(require_session)):
+    """下单前预览：这一档到底要付多少钱。前端据此渲染按钮文案与拦截提示。"""
+    if amount not in config.PAY_AMOUNTS:
+        return fail("充值金额不在允许范围内")
+    return ok(await _pay_facts(session["uid"], amount))
+
+
 @app.post("/api/user/pay")
 async def create_pay_order(body: PayBody, session: dict = Depends(require_session)):
     if body.amount not in config.PAY_AMOUNTS:
@@ -633,15 +728,30 @@ async def create_pay_order(body: PayBody, session: dict = Depends(require_sessio
                                   "method": body.payment_method, "status": "pending",
                                   "created_at": int(time.time())}
         return ok({"mode": "mock", "order_no": order_no,
+                   "payable": float(body.amount), "follow_upstream_rate": False,
                    "method": body.payment_method, **common}, "订单已创建")
     pat = session["pat"]
+    follow = bool(config.TOPUP_FOLLOW_UPSTREAM_RATE)
     payable = await na.pay_amount(pat, uid, body.amount, body.payment_method)
+    # 金额一致性闸门。刻意卡在 pay_amount（只算金额、不建单）与 pay_create（建单）
+    # 之间：拒绝时上游不会留下孤儿订单，用户也不会在收银台看到第二个价格。
+    if not follow:
+        try:
+            payable_f = float(payable)
+        except (TypeError, ValueError):
+            logger.error("上游应付金额无法解析 uid=%s payable=%r", uid, payable)
+            return fail("上游未返回可用的应付金额，请稍后重试", 502)
+        if abs(payable_f - body.amount) > _PAYABLE_TOLERANCE:
+            logger.error("充值金额闸门拦截 uid=%s 档位=¥%s 上游应付=%s",
+                         uid, body.amount, payable_f)
+            return fail(_rate_gate_message(payable_f, body.amount), 409)
     gw = await na.pay_create(pat, uid, body.amount, body.payment_method)
     # gateway_mode 区分「表单 POST 提交」与「直接跳转 URL」两种收银台形态。
     # 微信支付走后者（上游 data 返回字符串地址），必须让前端知道该走哪条路 ——
     # 否则会把一个 URL 字符串当对象去遍历字段，构出空表单。
     return ok({"mode": "epay", "gateway_mode": gw["mode"], "payable": payable,
                "gateway": gw["url"], "params": gw["params"],
+               "follow_upstream_rate": follow,
                "order_no": gw["order_no"], **common}, "订单已创建")
 
 
@@ -865,6 +975,12 @@ _DOCS_AFFECTING_KEYS = frozenset({
 _PRICING_AFFECTING_KEYS = frozenset({
     "PRICING_TTL", "PRICING_GROUPS", "DOC_MODELS", "POINTS_PER_CNY",
 })
+# 这些键会影响「这一档要付多少钱」的判断，保存后必须丢掉上游汇率缓存：
+# 否则管理员刚把上游 Price 改成 1，页面还要等 300s 才不再报「汇率未对齐」，
+# 表现为「改了但没用」，最容易被当成改错了又改回去。
+_PAY_AFFECTING_KEYS = frozenset({
+    "TOPUP_FOLLOW_UPSTREAM_RATE", "PAY_AMOUNTS", "POINTS_PER_CNY",
+})
 
 
 def _invalidate_caches(keys: Iterable[str]) -> None:
@@ -873,6 +989,8 @@ def _invalidate_caches(keys: Iterable[str]) -> None:
         docs_catalog.invalidate()
     if touched & _PRICING_AFFECTING_KEYS:
         pricing.invalidate()
+    if touched & _PAY_AFFECTING_KEYS:
+        na.reset_upstream_topup_price_cache()
 
 
 @app.put("/api/admin/settings")
@@ -1316,6 +1434,35 @@ def _load_capabilities() -> dict:
     return caps
 
 
+def _split_vendor_credits() -> tuple[dict[str, str], dict[str, str]]:
+    """拆「模型供应商映射」的 `供应商&credits` 复合值。
+
+    管理员在「模型供应商映射」里可把值写成 `供应商&标签` 形态
+    （如 ``deepseek-v4-flash:DeepSeek&L1-1.0x``），& 前是供应商、& 后是
+    credits 标签（描述词-相对倍数）。拆成两份返回：
+
+    - vendors：模型 → 纯供应商名（前端分组、条目 vendor 字段用）；
+    - credits：模型 → credits 标签（条目 credits 字段用），无 & 或 & 后为空的不收录。
+
+    这样脚本与前端拿到的永远是拆好的干净数据，不必各自理解 & 语法。
+    """
+    vendors: dict[str, str] = {}
+    credits: dict[str, str] = {}
+    for mid, raw in dyn_settings.model_vendor_map().items():
+        raw = str(raw).strip()
+        if not raw:
+            continue
+        if "&" in raw:
+            vendor, tag = (part.strip() for part in raw.split("&", 1))
+            if vendor:
+                vendors[mid] = vendor
+            if tag:
+                credits[mid] = tag
+        else:
+            vendors[mid] = raw
+    return vendors, credits
+
+
 @app.post("/api/setup/ticket")
 async def issue_setup_ticket_endpoint(request: Request, session: dict = Depends(require_session)):
     """签发 WorkBuddy 一键配置链接所需的 ticket。
@@ -1349,7 +1496,7 @@ async def _build_setup_models(pat: str) -> dict:
     这类管理类接口那样额外带 ``New-Api-User`` 头，因此也不必先 GET /api/user/self 反查 uid。
     """
     whitelist = list(config.DOC_MODELS)
-    vendor_map = dyn_settings.model_vendor_map()
+    vendor_map, credits_map = _split_vendor_credits()
     base_url = config.API_BASE_URL
     caps = _load_capabilities()
 
@@ -1372,6 +1519,7 @@ async def _build_setup_models(pat: str) -> dict:
             "id": mid,
             "name": mid,
             "vendor": vendor_map.get(mid, "Custom"),
+            "credits": credits_map.get(mid.lower(), ""),
             "url": base_url,
             "apiKey": pat,
             "supportsToolCall": True,
@@ -1507,12 +1655,15 @@ def _render_import_doc(api_key: str, bff_origin: str) -> str:
     # 核对来源保留在文档里。
     whitelist = [str(m).strip() for m in (config.DOC_MODELS or ()) if str(m).strip()]
     whitelist_json = json.dumps(whitelist, ensure_ascii=False)
-    vendors_json = json.dumps(dyn_settings.model_vendor_map(), ensure_ascii=False)
+    vendor_map, credits_map = _split_vendor_credits()
+    vendors_json = json.dumps(vendor_map, ensure_ascii=False)
+    credits_json = json.dumps(credits_map, ensure_ascii=False)
     json_example = (
         "{\n"
         '  "id": "<模型id>",\n'
         '  "name": "<模型id>",\n'
         '  "vendor": "<model_vendors[模型id] 的值；未命中写 Custom>",\n'
+        '  "credits": "<model_credits[模型id] 的值；未命中写空字符串>",\n'
         f'  "url": "{api_base}",\n'
         f'  "apiKey": "{api_key}",\n'
         '  "supportsToolCall": true,\n'
@@ -1537,7 +1688,8 @@ def _render_import_doc(api_key: str, bff_origin: str) -> str:
         f"- 允许安装的模型**白名单**（管理员后台「展示模型清单」，与站点配置 "
         f"`{config_url}` 的 `data.api.models` 同源，需要时可用它自愿核对，非必须）："
         f"`{whitelist_json}`\n"
-        f"- 模型→供应商映射（vendor 用；未命中写 Custom）：`{vendors_json}`\n\n"
+        f"- 模型→供应商映射（vendor 用；未命中写 Custom）：`{vendors_json}`\n"
+        f"- 模型→credits 标签映射（credits 用；未命中写空字符串）：`{credits_json}`\n\n"
         "## 步骤\n"
         "1. 用上方密钥调用模型列表接口（`-L` 跟随 FastAPI 默认的尾斜杠 301）：\n"
         "```bash\n"
@@ -1551,7 +1703,8 @@ def _render_import_doc(api_key: str, bff_origin: str) -> str:
         "   - 若过滤后一个都不剩（网关可用模型与白名单无交集）→ **改用白名单本身**，"
         "每个白名单项作为一个模型 `id`。\n"
         "3. 为每个保留的模型生成如下条目（`vendor` 取「模型→供应商映射」中该 id 的值，"
-        "未命中写 `Custom`；`maxInputTokens`/`maxOutputTokens` 从模型接口返回的上下文/"
+        "未命中写 `Custom`；`credits` 取「模型→credits 标签映射」中该 id 的值，"
+        "未命中写空字符串；`maxInputTokens`/`maxOutputTokens` 从模型接口返回的上下文/"
         "回复长度上限取真实值，取不到则省略该字段，不要写 0）：\n"
         "```json\n"
         f"{json_example}"

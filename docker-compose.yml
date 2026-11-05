@@ -72,13 +72,16 @@ services:
       NEWAPI_ADMIN_PAT: ${NEWAPI_ADMIN_PAT:?NEWAPI_ADMIN_PAT 必须设置，在 new-api「个人设置 → 系统访问令牌」生成}
       NEWAPI_ADMIN_UID: ${NEWAPI_ADMIN_UID:?NEWAPI_ADMIN_UID 必须设置，即管理员账号的用户 ID}
 
-      # 账密不是「PAT 的替代品」，而是 PAT 失效后的**唯一自愈通道**，生产同样必填。
-      # 原因：GET /api/user/token 每次调用都会重新生成 PAT 并作废旧值，管理员在
-      # 官方前端点一次「系统访问令牌」就会让这里配的 PAT 失效。此时
-      # newapi_client.py:201 的 401 分支会用账密重新换取；没有账密就永久瘫痪，
-      # 只能靠人工改环境变量 + 重启才能恢复。
-      NEWAPI_ADMIN_USERNAME: ${NEWAPI_ADMIN_USERNAME:?NEWAPI_ADMIN_USERNAME 必须设置，作为 PAT 失效后的自愈通道}
-      NEWAPI_ADMIN_PASSWORD: ${NEWAPI_ADMIN_PASSWORD:?NEWAPI_ADMIN_PASSWORD 必须设置，作为 PAT 失效后的自愈通道}
+      # 账密不是「PAT 的替代品」，而是 PAT 失效后的自愈通道。
+      # 仅「每应用独立子管理员」模式必填；统一运营号模式（多应用共用一把 PAT）
+      # 必须留空并配合 LOGIN_FALLBACK=0，否则任何一方自动轮换都会作废其他
+      # 应用的 PAT。两种模式的取舍见 README「多应用管理员凭证」。
+      NEWAPI_ADMIN_USERNAME: ${NEWAPI_ADMIN_USERNAME:-}
+      NEWAPI_ADMIN_PASSWORD: ${NEWAPI_ADMIN_PASSWORD:-}
+      # 兜底轮换开关：独立子管理员模式保持默认 1/1（401 自动读回/重登/轮换）；
+      # 统一运营号模式必须显式设 0/0（401 转人工，绝不自动轮换）。
+      NEWAPI_ADMIN_LOGIN_FALLBACK: ${NEWAPI_ADMIN_LOGIN_FALLBACK:-1}
+      NEWAPI_ADMIN_PAT_READBACK: ${NEWAPI_ADMIN_PAT_READBACK:-1}
 
       # ---- 运行模式 ----
       # 写死 0：mock 模式接的是内存假数据，误开等于对着假余额假日志运营。
@@ -105,6 +108,10 @@ services:
       BFF_PROMO_SIGNUP_POINTS: ${BFF_PROMO_SIGNUP_POINTS:-20000}
       BFF_PROMO_FIRST_TOPUP_ENABLED: ${BFF_PROMO_FIRST_TOPUP_ENABLED:-1}
       BFF_PROMO_FIRST_TOPUP_RATE: ${BFF_PROMO_FIRST_TOPUP_RATE:-1.0}
+      # 充值是否叠加上游汇率（new-api 的「充值价格 Price」）。默认 0：档位金额
+      # 就是应付人民币，上游 Price≠1 时下单被拒而非静默按汇率多收钱。
+      # 上游 Price 也改成 1、或想在页面按上游汇率展示实付金额时，才设 1。
+      BFF_TOPUP_FOLLOW_UPSTREAM_RATE: ${BFF_TOPUP_FOLLOW_UPSTREAM_RATE:-0}
 
       # ---- 品牌 ----
       # 留空不影响功能，只是页面上少显示对应信息。

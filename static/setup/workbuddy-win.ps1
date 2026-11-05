@@ -26,6 +26,8 @@ $ErrorActionPreference = "Stop"
 # ---------------- 默认配置 ----------------
 $script:DefaultApiBase = "https://ai.modelzoo.tech/v1"
 $script:CapabilitiesUrl = "https://workbuddy.oneworker.cn/setup/workbuddy-model-capabilities.txt"
+# 站点配置（管理员后台实时下发：模型供应商映射 / credits 标签 / 展示模型白名单）
+$script:SiteConfigUrl = "https://workbuddy.oneworker.cn/api/config"
 # 内置默认模型列表（在线拉取失败时的兜底）
 $script:FallbackModelIDs = @("auto","glm-5.2","glm-5.3","glm-5-turbo","deepseek-v4-flash","deepseek-v4-pro","minimax-m3","kimi-k2.7-code","step-3.7-flash")
 # 内置图片能力（查找键统一小写）
@@ -146,6 +148,35 @@ if ($modelsFetched) {
     foreach ($m in $script:FallbackImageModels) { $imageModels[$m.ToLower()] = $true }
 }
 
+# ---------------- 读取站点配置（供应商映射 + credits 标签，失败则维持默认） ----------------
+# 供应商映射值支持「供应商&credits」复合形态，BFF /api/config 已拆好下发：
+# model_vendors = 模型 → 纯供应商名；model_credits = 模型 → credits 标签。
+$modelCredits = @{}
+$vendorMap = @{}
+if ($modelsFetched) {
+    Write-Host "正在读取站点配置（模型供应商映射 / credits 标签）..."
+    try {
+        $sc = Invoke-RestMethod -Uri $script:SiteConfigUrl -TimeoutSec 30
+        $scApi = $sc.data.api
+        if ($scApi) {
+            if ($scApi.model_credits) {
+                foreach ($p in $scApi.model_credits.PSObject.Properties) {
+                    $v = [string]$p.Value
+                    if ($p.Name -and $v) { $modelCredits[$p.Name.ToLower()] = $v }
+                }
+            }
+            if ($scApi.model_vendors) {
+                foreach ($p in $scApi.model_vendors.PSObject.Properties) {
+                    $v = [string]$p.Value
+                    if ($p.Name -and $v) { $vendorMap[$p.Name] = $v }
+                }
+            }
+        }
+    } catch {
+        Write-Host ("警告：无法读取站点配置（{0}），模型条目将不带 credits、供应商写 Custom。" -f $_.Exception.Message) -ForegroundColor Yellow
+    }
+}
+
 # ---------------- 构造目标模型列表 ----------------
 $fixedModels = @()
 foreach ($modelID in $modelIDs) {
@@ -153,10 +184,19 @@ foreach ($modelID in $modelIDs) {
     if ($imageModels.ContainsKey($modelID.ToLower())) {
         $supportsImages = $imageModels[$modelID.ToLower()]
     }
+    $creditsValue = ""
+    if ($modelCredits.ContainsKey($modelID.ToLower())) {
+        $creditsValue = $modelCredits[$modelID.ToLower()]
+    }
+    $vendorValue = "Custom"
+    if ($vendorMap.ContainsKey($modelID)) {
+        $vendorValue = $vendorMap[$modelID]
+    }
     $fixedModels += [PSCustomObject]@{
         id                 = $modelID
         name               = $modelID
-        vendor             = "Custom"
+        vendor             = $vendorValue
+        credits            = $creditsValue
         url                = $script:ApiBase
         apiKey             = $apiKey
         supportsToolCall   = $true

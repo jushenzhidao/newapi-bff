@@ -25,9 +25,27 @@ BFF 在**所有出口**把 quota 换算成积分，前端拿不到也不需要 q
 | `BFF_QUOTA_PER_CNY` | `500000` | new-api 内部口径，除非改了 new-api 的 QuotaPerUnit 否则别动 |
 | `BFF_POINTS_UNIT_NAME` | `积分` | 单位名称，改成「点数」「Token 币」都行，前端跟着变 |
 | `BFF_PAY_AMOUNTS` | `10,30,50,100,300,500` | 充值档位（元） |
+| `BFF_TOPUP_FOLLOW_UPSTREAM_RATE` | `0` | 充值是否叠加上游汇率（见下） |
 
 换算函数集中在 `config.py`：`quota_to_points` / `points_to_quota` / `cny_to_points`。
 **新增接口时若返回金额，必须走 `quota_to_points` 转换后再命名为 `points`**，不要把裸 quota 泄露给前端。
+
+### 充值金额与上游汇率（务必读一次）
+
+上游 new-api 的收银台实收是 `amount × Price × 分组倍率 × 折扣`，其中 **`Price`（充值价格）
+默认 7.3**，语义是「1 美元 = 多少人民币」，而 BFF 的档位单位是人民币。两者语义错位时
+会出现：页面按钮写「支付 ¥10」，扫出来的二维码却是 **¥73.00**（10 × 7.3），
+数额差 7.3 倍且全程不报错。
+
+因此：
+
+- `BFF_TOPUP_FOLLOW_UPSTREAM_RATE=0`（默认）：BFF 认定「档位金额 = 应付人民币」。
+  下单前会用上游返回的**权威应付金额**比对，不一致直接拒绝并提示修复方式
+  （把上游 `Price` 改成 1，或在站点配置打开本开关）。**宁可拒绝下单，也不静默溢价收款。**
+- `=1`：承认上游汇率，充值页展示上游算出的真实应付金额（¥10 档 → 应付 ¥73.00），
+  到账积分仍按上游实际发放的额度折算。
+
+管理员可在「站点配置 → 充值与支付」在线切换（需二次确认），无需发版。
 
 ## 运营活动
 
@@ -209,6 +227,61 @@ if activeCount >= int64(common.UserSessionActiveLimit) {   // 默认 50
 .venv/bin/python scripts/fix_session_limit.py         # 诊断 + 方案
 .venv/bin/python scripts/fix_session_limit.py --sql   # 无其他登录方式时的 DB 修复语句
 ```
+
+## 多应用管理员凭证：独立子管理员 vs 统一运营号
+
+背景：2026-09-22 三个应用（flovart / hewapi / 明判）共用 uid=1 + 同一把 PAT。PAT 是
+`users.access_token` **单值列**，任何一方触发重新生成都覆盖旧值 → 其他应用立即 401 →
+对方兜底重登再轮换 → 乒乓循环，直到 50 会话 / 100 签发双限打爆。
+
+先记住核心事实：**PAT 共用本身不互踢**（静态列值，N 个进程可同时用一把），
+**互踢只来自「轮换」这个动作** —— `GET /api/user/token` 每次调用都会重新生成并作废旧值
+（官方前端打开「系统访问令牌」页就会触发）。所以两种模式的一切差异，都归结为"轮换由谁、何时触发"。
+
+### 模式 A：每应用一个独立子管理员（现状）
+
+```bash
+.venv/bin/python scripts/create_admin_account.py \
+    --base-url https://newapi-bff.oneapis.cn \
+    --username <应用名> --password '<随机强密码≤20位>' \
+    --root-user <root账号> --root-password '<root密码>'
+```
+
+脚本用 root 账密建 role=10 账号（root 全程不碰 `/api/user/token`，零污染），
+输出可直接粘贴的 `.env`（PAT/UID/USERNAME/PASSWORD）。每个应用的兜底轮换只轮换**自己的**
+access_token，物理上互不影响。新应用接入 = 跑一次脚本（约 2 分钟）。
+
+### 模式 B：统一运营号 + 禁轮换（新应用接入零成本）
+
+一个 role=10 运营号 + 一把 PAT，所有自家应用共用。互踢被焊死的关键是**关掉自动轮换**：
+
+| 环境变量 | 值 | 说明 |
+|---|---|---|
+| `NEWAPI_ADMIN_PAT` | 运营号 PAT | 所有应用粘贴**同一把** |
+| `NEWAPI_ADMIN_UID` | 运营号 uid | 同上 |
+| `NEWAPI_ADMIN_LOGIN_FALLBACK` | **`0`** | 401 不再自动重登/轮换，直接报错转人工 |
+| `NEWAPI_ADMIN_PAT_READBACK` | **`0`** | 双保险，关闭读回恢复 |
+| `NEWAPI_ADMIN_USERNAME/PASSWORD` | **删除** | fallback 已关，账密留在机器上纯属泄露面 |
+
+401 处置流程：人工在运营号生成新 PAT → 更新各应用 env → 滚动重启。
+BFF 启动时会打出"统一运营号共享模式"日志以确认配置生效。
+
+### 选型与混合策略
+
+| | 模式 A 独立子管理员 | 模式 B 统一运营号 |
+|---|---|---|
+| 新应用接入 | 跑一次脚本 | 粘贴同一组 env |
+| PAT 失效影响 | 只挂自己 | 全部应用，人工同步 |
+| 审计 | 各记各的号 | 混在运营号名下（区分看来源 IP） |
+| admin API 限频额度 | 每号独立 | 所有应用共享（CriticalRateLimit 按账号+IP 计） |
+
+两者可共存（BFF 只认 env）：**自家部署的应用走模式 B，外部 / 第三方 / 低信任应用走模式 A**。
+
+### 运维纪律（模式 B 必守）
+
+1. **永远不要在 new-api 面板打开运营账号的「系统访问令牌」页** —— 打开即重新生成并作废所有人的 PAT。
+2. PAT 失效只走"人工换 → 改 env → 滚动重启"，绝不开启任何自动轮换。
+3. 高频调用 admin API（批量建号 / 大量发码）的应用建议独立建号，避免共享限频额度互相挤兑。
 
 ## 关键实现点
 

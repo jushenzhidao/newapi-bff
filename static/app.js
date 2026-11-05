@@ -24,6 +24,9 @@ const MODEL = () => SITE.api.default_model;
 let PROMO = {
   unit: "积分",
   points_per_cny: 10000,
+  /* 是否按上游汇率结算（默认关闭）。关闭时档位金额就是应付金额；
+     开启时真实应付由 /api/user/pay/preview 下发，不能在这里推算。 */
+  follow_upstream_rate: false,
   pay_amounts: [{ cny: 10, points: 100000 }, { cny: 30, points: 300000 }, { cny: 50, points: 500000 },
                 { cny: 100, points: 1000000 }, { cny: 300, points: 3000000 }, { cny: 500, points: 5000000 }],
   signup: { enabled: false, points: 0 },
@@ -84,6 +87,12 @@ function fmtPointsFine(p) {
   return n.toFixed(abs >= 0.01 ? 2 : 4).replace(/\.?0+$/, "");
 }
 function fmtPointsUnit(p) { return `${fmtPoints(p)} ${PROMO.unit}`; }
+/* 人民币金额：整数不补小数位（¥10），带小数才显示两位（¥73.00）。
+   应付金额由上游汇率算出，可能是 73.00 这类非整数，必须能如实显示。 */
+function fmtCny(n) {
+  const v = Number(n || 0);
+  return Number.isInteger(v) ? String(v) : v.toFixed(2);
+}
 /* 积分 → 参考人民币（仅在需要给用户价格感知时使用，如充值档位） */
 function pointsToCny(p) { return (Number(p || 0) / (PROMO.points_per_cny || 10000)); }
 function fmtTime(ts) {
@@ -929,7 +938,7 @@ async function renderAnalytics() {
 }
 
 /* ================= 充值中心 ================= */
-let topupState = { tab: "pay", amount: 100, method: "wxpay" };
+let topupState = { tab: "pay", amount: 100, method: "wxpay", preview: null };
 
 async function renderTopup() {
   const u = currentUser;
@@ -950,7 +959,7 @@ async function renderTopup() {
 
   renderLayout("/topup", `
     <div class="page-title">充值中心</div>
-    <div class="page-sub">当前可用 <b id="topup-balance">${fmtPoints(u.points)}</b> ${PROMO.unit} · ¥1 = ${fmtPoints(PROMO.points_per_cny)} ${PROMO.unit}</div>
+    <div class="page-sub">当前可用 <b id="topup-balance">${fmtPoints(u.points)}</b> ${PROMO.unit} · ¥1 = ${fmtPoints(PROMO.points_per_cny)} ${PROMO.unit}${PROMO.follow_upstream_rate ? "（实付金额按上游汇率结算，以下单页为准）" : ""}</div>
     ${ftBanner}
 
     <div class="topup-tabs">
@@ -963,7 +972,7 @@ async function renderTopup() {
   document.querySelectorAll(".topup-tab").forEach(btn => {
     btn.onclick = () => { topupState.tab = btn.dataset.tab; renderTopup(); };
   });
-  if (st.tab === "pay") bindPayTab(); else bindCodeTab();
+  if (st.tab === "pay") { bindPayTab(); loadPayPreview(); } else bindCodeTab();
 
   // 支付回跳落地：URL 上带 trade_no 说明用户刚从收银台回来，直接查这一单
   const tradeNo = hashQuery().get("trade_no");
@@ -1007,6 +1016,20 @@ function payTabHtml() {
   const sel = list.find(a => a.cny === st.amount) || list[0] || { cny: st.amount, points: st.amount * PROMO.points_per_cny };
   const bonus = firstTopupTip(sel.cny);
   const maxCny = Math.max(...list.map(a => a.cny), 0);
+  /* 应付金额只认服务端预览：它由「上游 amount × 上游充值价格」决定，
+     前端凭档位金额推算就会重演「按钮写 ¥10、二维码 ¥73」。 */
+  const pv = (st.preview && st.preview.amount === sel.cny) ? st.preview : null;
+  const payable = (pv && !pv.blocked) ? pv.payable : sel.cny;
+  /* 被拦下时不能把档位金额写成「应付」—— 那个数字按上游汇率并不是真实收款额 */
+  const blockedCharge = (pv && pv.blocked && pv.upstream_price) ? sel.cny * pv.upstream_price : null;
+  const payableText = blockedCharge ? `—（上游应为 ¥${fmtCny(blockedCharge)}）` : `¥${fmtCny(payable)}`;
+  const rateNote = (pv && pv.follow_upstream_rate && pv.upstream_price && pv.upstream_price !== 1)
+    ? `<div class="muted" style="margin-top:10px;text-align:center">已按上游汇率结算：本档实付 ¥${fmtCny(payable)}（档位金额 ¥${sel.cny}）</div>`
+    : "";
+  const cta = (pv && pv.blocked)
+    ? `<button class="btn btn-primary btn-block" id="btn-pay" disabled>暂不可用：上游充值汇率未对齐</button>
+       <div class="pay-blocked"><b>无法按下单金额收款</b><br>${esc(pv.blocked_reason)}</div>`
+    : `<button class="btn btn-primary btn-block" id="btn-pay">支付 ¥${fmtCny(payable)}，获得 ${fmtPoints(sel.points + (bonus || 0))} ${PROMO.unit}</button>`;
   return `
     <div class="card-title">选择充值${PROMO.unit}</div>
     <div class="amount-grid">
@@ -1032,17 +1055,38 @@ function payTabHtml() {
       </button>
     </div>
     <div class="pay-summary">
+      <div class="ps-row"><span>应付金额</span><b>${payableText}</b></div>
       <div class="ps-row"><span>充值到账</span><b>${fmtPoints(sel.points)} ${PROMO.unit}</b></div>
       ${bonus ? `<div class="ps-row bonus"><span>首充赠送</span><b>+${fmtPoints(bonus)} ${PROMO.unit}</b></div>` : ""}
       <div class="ps-row total"><span>合计获得</span><b>${fmtPoints(sel.points + (bonus || 0))} ${PROMO.unit}</b></div>
     </div>
-    <button class="btn btn-primary btn-block" id="btn-pay">支付 ¥${sel.cny}，获得 ${fmtPoints(sel.points + (bonus || 0))} ${PROMO.unit}</button>
-    <div class="muted" style="margin-top:10px;text-align:center">点击后将打开收银台，支付成功后${PROMO.unit}自动到账</div>`;
+    ${cta}
+    <div class="muted" style="margin-top:10px;text-align:center">点击后将打开收银台，支付成功后${PROMO.unit}自动到账</div>
+    ${rateNote}`;
+}
+
+/* 拉取当前档位的应付金额/拦截状态。
+   失败不提示也不阻断：真正的把关在服务端下单那一刻（用的上游权威金额），
+   这里只是让用户在付钱之前看到准确价格。 */
+async function loadPayPreview() {
+  const st = topupState;
+  const amount = st.amount;
+  try {
+    const r = await api(`/api/user/pay/preview?amount=${encodeURIComponent(amount)}`);
+    if (st.amount !== amount) return;   // 期间用户切了档，丢弃过期结果
+    st.preview = r.data;
+    const body = document.getElementById("topup-body");
+    if (body && st.tab === "pay") { body.innerHTML = payTabHtml(); bindPayTab(); }
+  } catch (_) { /* 静默兜底，见上 */ }
 }
 
 function bindPayTab() {
   document.querySelectorAll(".amount-item").forEach(btn => {
-    btn.onclick = () => { topupState.amount = Number(btn.dataset.amount); renderTopup(); };
+    btn.onclick = () => {
+      topupState.amount = Number(btn.dataset.amount);
+      topupState.preview = null;        // 先清掉上一档的价格，避免张冠李戴
+      renderTopup();
+    };
   });
   document.querySelectorAll(".pay-method").forEach(btn => {
     btn.onclick = () => { topupState.method = btn.dataset.method; renderTopup(); };
@@ -1112,7 +1156,7 @@ function showPayWaiting(order) {
     <div class="pay-waiting">
       <div class="pw-spin"></div>
       <div>已打开收银台，本次将获得 <b>${fmtPoints(order.total_points)} ${PROMO.unit}</b></div>
-      <div class="muted" style="margin-top:6px">订单金额 ¥${order.amount}${order.bonus_points ? ` · 含首充赠送 ${fmtPoints(order.bonus_points)}` : ""}</div>
+      <div class="muted" style="margin-top:6px">订单金额 ¥${order.payable != null ? fmtCny(order.payable) : fmtCny(order.amount)}${order.bonus_points ? ` · 含首充赠送 ${fmtPoints(order.bonus_points)}` : ""}</div>
       <div class="muted" style="margin-top:6px">订单号 <span class="mono">${esc(order.order_no)}</span></div>
       <div class="muted" id="pw-hint" style="margin-top:6px">支付完成后本页会自动检测到账，请勿关闭</div>
       ${order.blocked ? `<div style="margin-top:8px"><a href="${esc(order.gateway)}" target="_blank" rel="noopener noreferrer">收银台被拦截，点此手动打开</a></div>` : ""}
@@ -1551,6 +1595,15 @@ async function renderAdmin() {
     if ("POINTS_PER_CNY" in ADMIN.dirty &&
         !confirm(`积分汇率将从 ${spec("POINTS_PER_CNY").value} 改为 ${ADMIN.dirty.POINTS_PER_CNY}。\n` +
                  "所有用户的余额显示会立即变化，确认继续？")) return;
+    // 开启「充值叠加上游汇率」= 用户实付金额按上游汇率变高（上游 Price=7.3 时
+    // ¥10 档收 ¥73）。这是定价决策，必须让人清楚自己在打开什么。
+    if (ADMIN.dirty.TOPUP_FOLLOW_UPSTREAM_RATE === true &&
+        !confirm("开启「充值叠加上游汇率」后，用户实付金额将按上游汇率结算：\n" +
+                 "上游 Price=7.3 时，¥10 档会实际收取 ¥73.00。\n\n确认按上游汇率收款？")) {
+      delete ADMIN.dirty.TOPUP_FOLLOW_UPSTREAM_RATE;
+      sync();
+      return;
+    }
     saveBtn.disabled = true;
     try {
       const res = await api("/api/admin/settings",

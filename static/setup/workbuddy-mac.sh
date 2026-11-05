@@ -293,6 +293,7 @@ function run(argv) {
   ];
   let siteModels = [];
   const modelVendors = {};   // 模型 → 供应商；未配置则 vendor 写 'Custom'
+  const modelCredits = {};   // 模型(小写) → credits 标签；未配置则条目不带 credits
   let effectiveBaseURL = apiBaseURL;
   if (siteConfigPath && fileExists(siteConfigPath)) {
     try {
@@ -314,6 +315,13 @@ function run(argv) {
           Object.keys(api.model_vendors).forEach(function (k) {
             const v = String(api.model_vendors[k] || '').trim();
             if (v !== '') { modelVendors[k] = v; }
+          });
+        }
+        // 模型 → credits 标签（描述词-相对倍数，如「劳模-1.0x」），站点配置动态下发。
+        if (api.model_credits && typeof api.model_credits === 'object') {
+          Object.keys(api.model_credits).forEach(function (k) {
+            const v = String(api.model_credits[k] || '').trim();
+            if (v !== '') { modelCredits[k.toLowerCase()] = v; }
           });
         }
       }
@@ -420,6 +428,7 @@ function run(argv) {
       id: modelID,
       name: modelID,
       vendor: modelVendors[modelID] || 'Custom',
+      credits: modelCredits[capabilityKey] || '',
       url: effectiveBaseURL,
       apiKey: apiKey,
       supportsToolCall: supportsToolCall,

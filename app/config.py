@@ -71,6 +71,30 @@ NEWAPI_BASE_URL: str = os.getenv("NEWAPI_BASE_URL", "https://api.aihuobao.cn")
 # /readyz 告警，别让默认值悄悄生效。
 NEWAPI_BASE_URL_IS_DEFAULT: bool = "NEWAPI_BASE_URL" not in os.environ
 
+# /v1 聊天透传的读超时（秒）。管理面统一 15s 对生成式请求太短：推理型模型
+# 首 token 前可能等待数分钟。仅作用于 openai_proxy 的专用连接池，
+# 不影响 /api 管理面调用的 15s 超时。
+CHAT_STREAM_TIMEOUT: float = float(os.getenv("BFF_CHAT_STREAM_TIMEOUT", "300"))
+
+# ==================== /v1 增强能力（时间注入 + 联网搜索）====================
+# 背景：/v1 透传通道的客户端（LibreChat custom endpoint、任意 OpenAI 兼容
+# 调用方）没有 agent 框架的工具循环，「几点了」「今天新闻」类问题无法回答。
+# 这两个能力做在 BFF 层，所有接入 /v1 的客户端自动获得，无需客户端改造。
+#
+# 时间注入：向 system 消息追加当前精确时间。messages 已含日期信息时自动跳过
+# （LibreChat agent 的 {{current_datetime}} 已解析进指令，不会重复注入）。
+TIME_INJECTION: bool = _bool("BFF_TIME_INJECTION", True)
+TIMEZONE: str = os.getenv("BFF_TIMEZONE", "Asia/Shanghai").strip()
+
+# 联网搜索：客户端在请求体加 "web_search": true（自定义字段，BFF 消费后剥除，
+# 不透传上游）即进入工具循环。搜索后端用 SearXNG（自托管免费无限额）；
+# 留空 = 搜索能力关闭，web_search 工具调用会得到「未配置」提示而非报错。
+SEARXNG_BASE_URL: str = os.getenv("BFF_SEARXNG_BASE_URL", "").strip()
+# 工具循环最大轮数（每轮一次上游补全 + 一批工具执行），超限后去掉工具强制收敛。
+WEB_SEARCH_MAX_ITERATIONS: int = _int("BFF_WEB_SEARCH_MAX_ITERATIONS", 4)
+# 单次搜索回填的结果条数。
+WEB_SEARCH_RESULTS_LIMIT: int = _int("BFF_WEB_SEARCH_RESULTS_LIMIT", 5)
+
 # 管理员账密（用于注册=影子建号、首充赠送 add_quota）。
 # 注意：不能写死管理员 PAT —— new-api 的 GET /api/user/token 每次调用都会重新生成 PAT，
 # 旧 PAT 随即作废。因此 BFF 用账密登录动态换 PAT 并缓存，遇 401 自动刷新重试。
@@ -246,6 +270,20 @@ PROMO_STATE_FILE: str = os.getenv(
 _DEF_PAY_AMOUNTS: tuple = tuple(
     int(x) for x in os.getenv("BFF_PAY_AMOUNTS", "10,30,50,100,300,500").split(",") if x.strip()
 )
+
+# 充值金额是否叠加上游汇率（new-api 的 Price）—— 默认关闭。
+#
+# 背景：上游 amount 是**整数**，其单位由上游 quota_display_type 决定；默认 USD 下
+# amount 被当作美元，收银台实收 = amount × Price（Price 默认 7.3，即美元兑人民币）。
+# BFF 的档位单位是人民币，两者语义天然错位 —— 实测某站点「¥10 档」扫出的二维码
+# 是 ¥73.00（10 × 7.3），页面标价与实收差 7.3 倍，且全程无人报错。
+#
+# 关闭（默认）：BFF 认定 amount 与人民币 1:1 —— 用户选 ¥10 就应付 ¥10。
+#   代价是上游必须把 Price 配成 1；没配时下单会被 main.create_pay_order 的
+#   金额一致性闸门直接拒绝。**宁可拒绝下单，也不静默按汇率溢价收款。**
+# 开启：承认上游汇率，前端改为展示上游算出的真实应付金额（¥10 档 → 应付 ¥73.00），
+#   到账积分仍按上游实际发放的额度折算。
+_DEF_TOPUP_FOLLOW_UPSTREAM_RATE: bool = _bool("BFF_TOPUP_FOLLOW_UPSTREAM_RATE", False)
 
 
 # ==================== 兑换码登录 ====================

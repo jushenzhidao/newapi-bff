@@ -66,6 +66,10 @@ def public_config() -> dict:
     return {
         "unit": config.POINTS_UNIT_NAME,
         "points_per_cny": config.POINTS_PER_CNY,
+        # 是否按上游汇率结算（默认关闭）。这里只下发模式本身，**不下发上游价格** ——
+        # 本接口匿名可读，价格随档位不同（真实应付见 /api/user/pay/preview），
+        # 且匿名接口不该去回源上游。
+        "follow_upstream_rate": bool(config.TOPUP_FOLLOW_UPSTREAM_RATE),
         "pay_amounts": [
             {"cny": a, "points": config.cny_to_points(a)} for a in config.PAY_AMOUNTS
         ],

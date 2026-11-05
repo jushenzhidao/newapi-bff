@@ -403,6 +403,14 @@ a { text-decoration: none; color: inherit; }
 .pay-summary .ps-row.total { border-top: 1px solid var(--border); margin-top: 7px; padding-top: 10px; }
 .pay-summary .ps-row.total b { font-size: 17px; color: var(--primary); }
 
+/* 上游汇率闸门拦截提示 —— 这是「充不了值」的原因，必须比正文更醒目 */
+.pay-blocked {
+  margin-top: 12px; padding: 12px 14px; border-radius: 10px;
+  background: var(--warn-soft); border: 1px solid #fcd9a4;
+  font-size: 12.5px; line-height: 1.7; color: #8a6d2b;
+}
+.pay-blocked b { color: #b45309; }
+
 /* 首充活动横幅 */
 .ft-banner {
   display: flex; align-items: center; gap: 14px; margin: 0 0 18px;
@@ -867,6 +875,11 @@ tbody tr:hover { background: #fafbfd; }
   font-size: 12.5px; color: var(--text); background: var(--primary-soft);
   border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px;
   font-family: var(--mono); white-space: nowrap;
+}
+.doc-model-credits {
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 11.5px; font-weight: 700;
+  color: var(--primary); margin-left: 4px;
 }
 
 .doc-crumb { color: var(--text-3); font-size: 13px; margin-bottom: 6px; }

@@ -30,8 +30,15 @@ services:
       NEWAPI_BASE_URL: ${NEWAPI_BASE_URL:?NEWAPI_BASE_URL 必须设置，如 https://api.example.com}
       NEWAPI_ADMIN_PAT: ${NEWAPI_ADMIN_PAT:?NEWAPI_ADMIN_PAT 必须设置，在 new-api「个人设置 → 系统访问令牌」生成}
       NEWAPI_ADMIN_UID: ${NEWAPI_ADMIN_UID:?NEWAPI_ADMIN_UID 必须设置，即管理员账号的用户 ID}
-      NEWAPI_ADMIN_USERNAME: ${NEWAPI_ADMIN_USERNAME:?NEWAPI_ADMIN_USERNAME 必须设置，PAT 失效自愈通道}
-      NEWAPI_ADMIN_PASSWORD: ${NEWAPI_ADMIN_PASSWORD:?NEWAPI_ADMIN_PASSWORD 必须设置，PAT 失效自愈通道}
+      # 账密仅在「每应用独立子管理员」模式必填（PAT 失效自愈通道）。
+      # 统一运营号模式（多应用共用一把 PAT）必须留空并配合 LOGIN_FALLBACK=0，
+      # 否则任何一方自动轮换都会作废其他应用的 PAT。见 README「多应用管理员凭证」。
+      NEWAPI_ADMIN_USERNAME: ${NEWAPI_ADMIN_USERNAME:-}
+      NEWAPI_ADMIN_PASSWORD: ${NEWAPI_ADMIN_PASSWORD:-}
+      # 兜底轮换开关：独立子管理员模式保持默认 1/1（可自愈）；
+      # 统一运营号模式必须显式设 0/0（401 转人工，绝不自动轮换）。
+      NEWAPI_ADMIN_LOGIN_FALLBACK: ${NEWAPI_ADMIN_LOGIN_FALLBACK:-1}
+      NEWAPI_ADMIN_PAT_READBACK: ${NEWAPI_ADMIN_PAT_READBACK:-1}
 
       # ---- 运行模式（生产写死）----
       BFF_MOCK_MODE: "0"
@@ -44,6 +51,9 @@ services:
       BFF_PROMO_SIGNUP_POINTS: ${BFF_PROMO_SIGNUP_POINTS:-20000}
       BFF_PROMO_FIRST_TOPUP_ENABLED: ${BFF_PROMO_FIRST_TOPUP_ENABLED:-1}
       BFF_PROMO_FIRST_TOPUP_RATE: ${BFF_PROMO_FIRST_TOPUP_RATE:-1.0}
+      # 充值是否叠加上游汇率（new-api 的「充值价格 Price」）。默认 0 = 档位金额
+      # 即应付人民币；上游 Price≠1 时下单被拒绝并提示，不会静默按汇率多收钱。
+      BFF_TOPUP_FOLLOW_UPSTREAM_RATE: ${BFF_TOPUP_FOLLOW_UPSTREAM_RATE:-0}
 
       # ---- 品牌 ----
       BFF_BRAND_NAME: ${BFF_BRAND_NAME:-NexusAPI}

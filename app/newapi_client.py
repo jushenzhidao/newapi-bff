@@ -690,6 +690,46 @@ async def pay_amount(pat: str, uid: int, amount: int, method: str) -> str:
     return str(body["data"])
 
 
+# ---------- 上游充值汇率（Price）----------
+# 上游收银台实收 = amount × Price × 分组倍率 × 折扣（controller/topup.go: getPayMoney）。
+# Price 默认 7.3（美元→人民币），且与 quota_display_type 一起决定 amount 的单位 ——
+# 这就是「BFF 的 ¥10 档被上游当成 $10、扫出 ¥73 二维码」的根因。
+#
+# 缓存 300s 的理由：/api/status 匿名可读但属「运营级配置」，一次拉取服务全站预览，
+# 不能让用户每切一次档位就打一次上游。
+_STATUS_PRICE_TTL = 300
+_status_price_cache: dict = {"price": None, "at": 0.0}
+
+
+async def get_upstream_topup_price() -> Optional[float]:
+    """上游充值汇率 Price：应付人民币 = amount × Price。
+
+    失败一律返回 None（调用方按「未知」处理，不拦单、也不在页面上编数字）。
+    **绝不能回落成 1.0** —— 那等于把「不知道」伪装成「没问题」，
+    而这里猜错的代价是用户被按错误的汇率扣钱。
+    """
+    now = time.time()
+    cached = _status_price_cache.get("price")
+    if cached is not None and now - float(_status_price_cache.get("at") or 0) < _STATUS_PRICE_TTL:
+        return float(cached)
+    try:
+        body = await request("GET", "/api/status", headers={})
+        price = float((body or {}).get("data", {}).get("price"))
+    except (NewApiError, AttributeError, TypeError, ValueError) as e:
+        logger.warning("读取上游充值汇率失败，本次按未知处理: %s", e)
+        return None
+    if price <= 0:      # 0/负数不是「免费」，是上游配置坏了
+        logger.warning("上游充值汇率取值异常: %s", price)
+        return None
+    _status_price_cache.update({"price": price, "at": now})
+    return price
+
+
+def reset_upstream_topup_price_cache() -> None:
+    """清汇率缓存。保存动态配置后调用，否则改了上游 Price 要等 300s 才可见。"""
+    _status_price_cache.update({"price": None, "at": 0.0})
+
+
 def _trade_no_from_url(url: str) -> str:
     """从网关跳转地址里抽商户订单号。
 
