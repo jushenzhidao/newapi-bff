@@ -263,7 +263,7 @@ function run(argv) {
 
   // 站点配置（管理员后台「展示模型清单」/「对外 API 地址」）：白名单与网关地址
   // 优先从这里取，拉不到/解析失败保持内置默认。
-  let allowedModelPrefixes = [
+  let allowedModelIDs = [
     'gpt-4o', 'gpt-4o-mini', 'claude-sonnet-4', 'deepseek-chat', 'gemini-2.0-flash',
   ];
   let siteModels = [];
@@ -280,7 +280,7 @@ function run(argv) {
           siteModels = api.models.map(function (m) { return String(m || '').trim(); })
             .filter(function (m) { return m !== ''; });
           if (siteModels.length > 0) {
-            allowedModelPrefixes = siteModels.map(function (m) { return m.toLowerCase(); });
+            allowedModelIDs = siteModels.map(function (m) { return m.toLowerCase(); });
           }
         }
         const bu = String(api.base_url || '').trim();
@@ -315,9 +315,10 @@ function run(argv) {
   // /v1/models 返回 OpenAI 格式: { object: 'list', data: [ { id: '...', ... }, ... ] }
   const modelIDs = [];
   const seenModelIDs = {};
-  // 硬白名单（前缀匹配，大小写不敏感）：渠道模型 ID 常带版本后缀
-  // （如 gpt-4o-2024-11-20 / claude-sonnet-4-20250514），以白名单项开头的
-  // 都保留原始 ID，其他（o3-mini 等）一律跳过。白名单来自站点配置。
+  // 硬白名单（严格匹配，大小写不敏感）：只有与白名单项完全相等的模型 ID
+  // 才写入，其余（o3-mini、渠道里的衍生变体如 claude-fable-5-1 等）一律跳过。
+  // 曾经用前缀匹配兼容版本后缀渠道模型，结果把 claude-fable-5-1 这类
+  // 衍生 ID 一起带进了配置，改为严格相等。白名单来自站点配置。
   function collectModelIDs(entries) {
     entries.forEach(function (entry) {
       const modelID = String((entry && entry.id) || '').trim();
@@ -326,8 +327,8 @@ function run(argv) {
         return;
       }
       let allowed = false;
-      for (let i = 0; i < allowedModelPrefixes.length; i++) {
-        if (key.indexOf(allowedModelPrefixes[i]) === 0) { allowed = true; break; }
+      for (let i = 0; i < allowedModelIDs.length; i++) {
+        if (key === allowedModelIDs[i]) { allowed = true; break; }
       }
       if (!allowed) {
         return;

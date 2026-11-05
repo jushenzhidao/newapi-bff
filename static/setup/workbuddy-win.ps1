@@ -155,6 +155,7 @@ if ($modelsFetched) {
 # model_vendors = 模型 → 纯供应商名；model_credits = 模型 → credits 标签。
 $modelCredits = @{}
 $vendorMap = @{}
+$siteModels = @()   # 站点配置「展示模型清单」，用于白名单严格过滤
 if ($modelsFetched) {
     Write-Host "正在读取站点配置（模型供应商映射 / credits 标签）..."
     try {
@@ -170,6 +171,9 @@ if ($modelsFetched) {
         }
         $scApi = $sc.data.api
         if ($scApi) {
+            if ($scApi.models -and @($scApi.models).Count -gt 0) {
+                $siteModels = @($scApi.models)
+            }
             if ($scApi.model_credits) {
                 foreach ($p in $scApi.model_credits.PSObject.Properties) {
                     $v = [string]$p.Value
@@ -185,6 +189,21 @@ if ($modelsFetched) {
         }
     } catch {
         Write-Host ("警告：无法读取站点配置（{0}），模型条目将不带 credits、供应商写 Custom。" -f $_.Exception.Message) -ForegroundColor Yellow
+    }
+}
+
+# ---------------- 白名单过滤（严格匹配，与 cmd/sh 版一致） ----------------
+# 只保留与「展示模型清单」完全相等的模型 ID（大小写不敏感）；
+# 渠道里的衍生变体（如 claude-fable-5-1）不在清单内，一律不写入。
+if ($siteModels.Count -gt 0 -and $modelIDs.Count -gt 0) {
+    $allowSet = @{}
+    foreach ($m in $siteModels) {
+        $k = ([string]$m).Trim().ToLower()
+        if ($k) { $allowSet[$k] = $true }
+    }
+    $filteredIDs = @($modelIDs | Where-Object { $allowSet.ContainsKey(([string]$_).Trim().ToLower()) })
+    if ($filteredIDs.Count -gt 0) {
+        $modelIDs = $filteredIDs
     }
 }
 

@@ -304,9 +304,10 @@ try {
             $fetchModelError = New-Object System.Exception ('配置服务返回了无效数据')
         } else {
             # /v1/models 返回 OpenAI 格式: { object: 'list', data: [ { id: '...', ... }, ... ] }
-            # 硬白名单（前缀匹配，大小写不敏感）：渠道模型 ID 常带版本后缀
-            # （如 gpt-4o-2024-11-20 / claude-sonnet-4-20250514），以白名单项
-            # 开头的都保留原始 ID，其他（o3-mini 等）一律不写入。
+            # 硬白名单（严格匹配，大小写不敏感）：只有与白名单项完全相等的模型 ID
+            # 才写入，其余（o3-mini、渠道里的衍生变体如 claude-fable-5-1 等）一律
+            # 不写入 —— 曾经用前缀匹配兼容版本后缀渠道模型，结果把衍生 ID 一起
+            # 带进了配置，改为严格相等。
             $modelIDs = @(
                 $setupResponse.data |
                     ForEach-Object { ([string]$_.id).Trim() } |
@@ -315,7 +316,7 @@ try {
                         $id = $_.ToLower()
                         $matched = $false
                         foreach ($allow in $fallbackModelIDs) {
-                            if ($id.StartsWith($allow.ToLower())) { $matched = $true; break }
+                            if ($id -eq $allow.ToLower()) { $matched = $true; break }
                         }
                         $matched
                     } |
