@@ -132,7 +132,14 @@ function New-FixedModel {
         if ($mapped) { $vendorName = $mapped }
     }
 
-    return [PSCustomObject][ordered]@{
+    # credits 标签（如「L1-1.0x」）：后台供应商映射「供应商&credits」复合值拆分后下发，
+    # 未配置的模型不带该字段（与 sh 脚本产出一致）
+    $creditsValue = ''
+    if ($modelCredits.ContainsKey($ModelID)) {
+        $creditsValue = ([string]$modelCredits[$ModelID]).Trim()
+    }
+
+    $entry = [ordered]@{
         id = $ModelID
         name = $ModelID
         vendor = $vendorName
@@ -148,6 +155,8 @@ function New-FixedModel {
         maxInputTokens = $maxInputTokens
         maxOutputTokens = $maxOutputTokens
     }
+    if (-not $creditsValue) { $entry.Remove('credits') }
+    return [PSCustomObject]$entry
 }
 
 function Enable-Tls12 {
@@ -229,9 +238,10 @@ try {
         throw 'API Key 不能为空。'
     }
 
-    # 模型 → 供应商映射容器，必须在拉站点配置**之前**初始化：
+    # 模型 → 供应商映射 / credits 标签容器，必须在拉站点配置**之前**初始化：
     # 曾因放在配置拉取之后，把刚读到的映射清空，导致 vendor 恒为 Custom。
     $modelVendors = @{}
+    $modelCredits = @{}
 
     # 先拉站点配置：白名单模型 + 网关地址由管理员后台动态下发，失败保持内置兜底
     Write-Host '正在读取站点配置...' -ForegroundColor DarkGray
@@ -255,6 +265,13 @@ try {
                 foreach ($p in $siteConfig.data.api.model_vendors.PSObject.Properties) {
                     $v = ([string]$p.Value).Trim()
                     if ($v) { $modelVendors[[string]$p.Name] = $v }
+                }
+            }
+            # 模型 → credits 标签（后台同一配置里「供应商&credits」复合值拆出的 & 后段）
+            if ($null -ne $siteConfig.data.api.model_credits) {
+                foreach ($p in $siteConfig.data.api.model_credits.PSObject.Properties) {
+                    $v = ([string]$p.Value).Trim()
+                    if ($v) { $modelCredits[[string]$p.Name] = $v }
                 }
             }
         }
